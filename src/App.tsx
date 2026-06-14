@@ -1,122 +1,97 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import React, { useState } from 'react';
+import { useCompanionChat, VOICE_PRESETS } from './hooks/useCompanionChat';
+import { ChatInput } from './components/ChatInput';
+import { Home } from './components/Home';
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [view, setView] = useState<'home' | 'consult' | 'chat'>('home');
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  
+  // フックから sessions を受け取る
+  const { 
+    messages, 
+    isLoading, 
+    sendMessage, 
+    selectedVoice, 
+    setSelectedVoice, 
+    playVoice, 
+    isMuted, 
+    setIsMuted,
+    sessions 
+  } = useCompanionChat(currentSessionId);
+
+  const startNewConsult = () => {
+    setCurrentSessionId(crypto.randomUUID());
+    setView('consult');
+  };
+
+  // 💡 過去のセッションを復帰させて部屋に入る関数
+  const resumeConsult = (sessionId: string) => {
+    setCurrentSessionId(sessionId);
+    setView('consult');
+  };
+
+  if (view === 'home') {
+    return (
+      <div style={{ maxWidth: '600px', margin: '0 auto', height: '100vh', border: '1px solid #eee' }}>
+        <Home 
+          onStartConsult={startNewConsult}
+          onStartChat={() => alert('雑談モードは現在開発中だよ！')}
+          sessions={sessions} // 💡 履歴リストを渡す
+          onSelectSession={resumeConsult} // 💡 復帰関数を渡す
+        />
+      </div>
+    );
+  }
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
+    <div style={{ maxWidth: '600px', margin: '0 auto', height: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif', border: '1px solid #eee', backgroundColor: '#fff' }}>
+      
+      <div style={{ padding: '12px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <button 
+          onClick={() => { setView('home'); setCurrentSessionId(null); }} 
+          style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer' }}
         >
-          Count is {count}
+          ←
         </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#334155' }}>
+            {messages.length > 0 ? '相談の続き' : '新しい相談'}
+          </span>
+          <select 
+            value={selectedVoice} 
+            onChange={(e) => setSelectedVoice(e.target.value)}
+            style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #ccc', fontSize: '12px', marginLeft: 'auto' }}
+          >
+            {VOICE_PRESETS.map(preset => (
+              <option key={preset.id} value={preset.id}>{preset.name}</option>
+            ))}
+          </select>
         </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+      </div>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {messages.map((msg) => {
+          const isAi = String(msg.sender).trim().toLowerCase() === 'ai';
+          return (
+            <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isAi ? 'flex-start' : 'flex-end', opacity: msg.isQuickResponse ? 0.7 : 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexDirection: isAi ? 'row' : 'row-reverse' }}>
+                <div style={{ padding: '12px 16px', borderRadius: '18px', backgroundColor: isAi ? '#f1f0f0' : '#1890ff', color: isAi ? '#000' : '#fff', fontSize: '15px', whiteSpace: 'pre-wrap' }}>
+                  {msg.text}
+                  {msg.isQuickResponse && <div style={{ fontSize: '11px', marginTop: '4px', color: '#888' }}>🤖 思考中...</div>}
+                </div>
+                {isAi && !msg.isQuickResponse && (
+                  <button onClick={() => playVoice(msg.text)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '16px' }}>📢</button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <ChatInput onSendMessage={sendMessage} isLoading={isLoading} isMuted={isMuted} setIsMuted={setIsMuted} />
+    </div>
+  );
 }
 
-export default App
+export default App;
