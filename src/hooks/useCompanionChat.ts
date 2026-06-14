@@ -8,10 +8,10 @@ const PRIMARY_MODEL = 'gemini-3.1-flash-lite';
 const BACKUP_MODEL = 'gemini-2.5-flash-lite';
 
 export const VOICE_PRESETS = [
-  { id: 'ja-JP-Neural2-B', name: 'ハツラツ（女性）' },
-  { id: 'ja-JP-Wavenet-A', name: '落ち着いた（女性）' },
-  { id: 'ja-JP-Neural2-C', name: 'スマート（男性）' },
-  { id: 'ja-JP-Neural2-D', name: '渋い・低音（男性）' },
+  { id: 'ja-JP-Neural2-B', name: 'ハツラツ' },
+  { id: 'ja-JP-Wavenet-A', name: '落ち着いた' },
+  { id: 'ja-JP-Neural2-C', name: 'スマート' },
+  { id: 'ja-JP-Neural2-D', name: '渋い・低音' },
 ];
 
 export interface Message {

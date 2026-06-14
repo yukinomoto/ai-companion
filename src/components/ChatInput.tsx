@@ -1,115 +1,74 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 
 interface ChatInputProps {
-  onSendMessage: (text: string, isVoiceInput: boolean) => void;
+  onSendMessage: (text: string, isVoice: boolean) => void;
   isLoading: boolean;
   isMuted: boolean;
   setIsMuted: (muted: boolean) => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, isMuted, setIsMuted }) => {
-  const [inputText, setInputText] = useState('');
-  const [isListening, setIsListening] = useState(false);
-  const recognitionRef = useRef<any>(null);
-  const transcriptBufferRef = useRef<string>('');
+  const [text, setText] = useState('');
 
-  useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      const recognition = new SpeechRecognition();
-      recognition.lang = 'ja-JP';
-      recognition.continuous = true; 
-      recognition.interimResults = true; 
-      recognition.maxAlternatives = 1;
-
-      recognition.onstart = () => { setIsListening(true); transcriptBufferRef.current = ''; };
-      recognition.onend = () => { setIsListening(false); };
-      recognition.onresult = (event: any) => {
-        let finalTranscript = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
-        }
-        if (finalTranscript) transcriptBufferRef.current += finalTranscript;
-      };
-      recognitionRef.current = recognition;
-    }
-  }, []);
-
-  const handleSendText = (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || isLoading) return;
-    onSendMessage(inputText, false);
-    setInputText('');
-  };
-
-  const toggleVoiceInput = () => {
-    if (!recognitionRef.current) return;
-    if (isListening) {
-      recognitionRef.current.stop();
-      setTimeout(() => {
-        const finalSpeechText = transcriptBufferRef.current.trim();
-        if (finalSpeechText) onSendMessage(finalSpeechText, true);
-      }, 300);
-    } else {
-      recognitionRef.current.start();
-    }
+    if (!text.trim() || isLoading) return;
+    onSendMessage(text, false);
+    setText('');
   };
 
   return (
-    <div style={{ padding: '16px', borderTop: '1px solid #eee', backgroundColor: '#fff' }}>
-      <form onSubmit={handleSendText} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-        
-        <button
-          type="button"
-          onClick={() => {
-            const nextMuted = !isMuted;
-            setIsMuted(nextMuted);
-            // 💡 ミュートがON（true）になった瞬間に、鳴っている音声を強制的に止める！
-            if (nextMuted) {
-              const existingAudio = document.getElementById('companion-voice') as HTMLAudioElement;
-              if (existingAudio) {
-                existingAudio.pause();
-                existingAudio.currentTime = 0;
-              }
-            }
-          }}
-          style={{
-            padding: '12px', borderRadius: '50%', border: '1px solid #eee',
-            backgroundColor: isMuted ? '#f5f5f5' : '#e6f7ff', color: '#fff',
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '44px', height: '44px',
-            fontSize: '18px'
-          }}
-          title={isMuted ? "自動音声をONにする" : "自動音声をOFF（ミュート）にする"}
-        >
-          {isMuted ? '🔇' : '🔊'}
-        </button>
+    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+      
+      {/* ミュート切り替えボタン */}
+      <button 
+        onClick={() => setIsMuted(!isMuted)} 
+        style={{ 
+          background: isMuted ? '#f1f5f9' : '#e0f2fe', 
+          border: 'none', width: '44px', height: '44px', borderRadius: '50%', 
+          cursor: 'pointer', fontSize: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: isMuted ? '#94a3b8' : '#0ea5e9'
+        }}
+      >
+        {isMuted ? '🔇' : '🔊'}
+      </button>
 
-        <button
-          type="button"
-          onClick={toggleVoiceInput}
+      {/* 💡 カプセル型の入力エリア */}
+      <form onSubmit={handleSubmit} style={{ 
+        flex: 1, display: 'flex', gap: '8px', alignItems: 'center', 
+        backgroundColor: '#f8fafc', borderRadius: '30px', padding: '6px 6px 6px 20px', 
+        border: '1px solid #e2e8f0' 
+      }}>
+        <input 
+          type="text" 
+          value={text} 
+          onChange={(e) => setText(e.target.value)} 
+          placeholder="メッセージを入力..." 
           disabled={isLoading}
-          style={{
-            padding: '12px', borderRadius: '50%', border: 'none',
-            backgroundColor: isListening ? '#ff4d4f' : '#1890ff', color: '#fff',
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '44px', height: '44px'
-          }}
-        >
-          {isListening ? '⏹️' : '🎙️'}
-        </button>
-
-        <input
-          type="text"
-          value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
-          placeholder={isListening ? '🔴 話し終わったら四角ボタンを押してね...' : 'メッセージを入力...'}
-          disabled={isLoading || isListening}
-          style={{ flex: 1, padding: '12px', borderRadius: '24px', border: '1px solid #ccc', fontSize: '16px' }}
+          style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: '15px', color: '#1e293b' }}
         />
         
-        <button type="submit" disabled={isLoading || !inputText.trim() || isListening} style={{ padding: '0 20px', borderRadius: '24px', border: 'none', backgroundColor: '#000', color: '#fff', fontSize: '16px', height: '44px' }}>
-          送信
-        </button>
+        {/* テキストがある時は黒い紙飛行機、無い時は青いマイク */}
+        {text.trim() ? (
+          <button 
+            type="submit" 
+            disabled={isLoading} 
+            style={{ background: '#0f172a', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            ➤
+          </button>
+        ) : (
+          <button 
+            type="button"
+            disabled={isLoading} 
+            onClick={() => alert('音声入力は現在開発中です！')}
+            style={{ background: '#3b82f6', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            🎙️
+          </button>
+        )}
       </form>
+      
     </div>
   );
 };

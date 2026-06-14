@@ -1,137 +1,93 @@
 import React from 'react';
-import { Robot } from './Robot';
 import type { ChatSession } from '../hooks/useCompanionChat';
+import { Companion3D } from './Companion3D';
 
 interface HomeProps {
   onStartConsult: () => void;
   onStartChat: () => void;
-  sessions: ChatSession[]; // 💡 過去の部屋リストを受け取る
-  onSelectSession: (id: string) => void; // 💡 部屋が選ばれた時の関数を受け取る
+  sessions: ChatSession[];
+  onSelectSession: (sessionId: string) => void;
 }
 
 export const Home: React.FC<HomeProps> = ({ onStartConsult, onStartChat, sessions, onSelectSession }) => {
-  const getGreeting = () => {
-    const hour = new Date().getHours();
-    if (hour >= 5 && hour < 12) return 'おはよう、ユウキ！\n今日はどんな一日にする？';
-    if (hour >= 12 && hour < 18) return 'こんにちは！\n調子はどうかな？';
-    return 'おかえり、ユウキ。\n今日もお疲れ様。';
-  };
-
   return (
-    <div style={{
-      height: '100vh',
-      display: 'flex',
-      flexDirection: 'column',
-      padding: '40px 24px 24px 24px',
-      background: '#FFF9F1',
-      boxSizing: 'border-box'
-    }}>
-      {/* 上部：ロボットと挨拶 */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', marginTop: '20px' }}>
-        <Robot />
-        <h1 style={{ 
-          fontSize: '22px', 
-          fontWeight: '500', 
-          color: '#334155', 
-          whiteSpace: 'pre-wrap',
-          lineHeight: '1.4',
-          margin: 0,
-          textAlign: 'center'
-        }}>
-          {getGreeting()}
-        </h1>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#f0f4f8', fontFamily: 'sans-serif' }}>
+      
+      {/* 挨拶エリア */}
+      <div style={{ padding: '24px 20px 12px' }}>
+        <h1 style={{ fontSize: '22px', fontWeight: 'bold', color: '#1e293b', margin: '0 0 6px 0' }}>おはよう、ユウキ！</h1>
+        <p style={{ fontSize: '14px', color: '#64748b', margin: 0 }}>今日も一緒に、いい一日にしようね。</p>
       </div>
 
-      {/* 💡【新設】中央：過去の相談履歴リストエリア */}
-      <div style={{ 
-        flex: 1, 
-        width: '100%', 
-        overflowY: 'auto', 
-        margin: '24px 0', 
-        padding: '8px',
-        backgroundColor: 'rgba(255,255,255,0.4)',
-        borderRadius: '20px',
-        boxSizing: 'border-box',
-        border: '1px dashed #E2E8F0'
-      }}>
-        <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#64748B', padding: '0 8px 8px 8px', textAlign: 'left' }}>
-          🕒 過去の相談から再開
-        </div>
-        
-        {sessions.length === 0 ? (
-          <div style={{ padding: '24px', fontSize: '14px', color: '#94A3B8', textAlign: 'center' }}>
-            まだ過去の相談履歴はありません。
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {sessions.map((session) => (
-              <div
-                key={session.session_id}
-                onClick={() => onSelectSession(session.session_id)}
-                style={{
-                  padding: '12px 16px',
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: '14px',
-                  border: '1px solid #E2E8F0',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontSize: '14px',
-                  color: '#334155',
-                  fontWeight: '500'
-                }}
-              >
-                {session.first_message}
-              </div>
-            ))}
-          </div>
-        )}
+      {/* 3Dキャラクター（ホーム画面用） */}
+      <div style={{ padding: '0 16px' }}>
+        {/* ホーム画面では isLoading=false 固定でぷかぷかさせておきます */}
+        <Companion3D isLoading={false} />
       </div>
 
-      {/* 下部：2つのアクションボタン */}
-      <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {/* メインアクションボタン */}
+      <div style={{ display: 'flex', gap: '12px', padding: '16px' }}>
         <button
           onClick={onStartConsult}
           style={{
-            padding: '16px 20px',
-            borderRadius: '20px',
-            border: '1px solid #E2E8F0',
-            backgroundColor: '#FFFFFF',
-            boxShadow: '0 4px 6px rgba(0,0,0,0.03)',
-            cursor: 'pointer',
-            textAlign: 'left',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '2px'
+            flex: 1, backgroundColor: '#ffffff', borderRadius: '20px', padding: '16px', border: 'none',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.04)', display: 'flex', flexDirection: 'column',
+            alignItems: 'center', gap: '12px', cursor: 'pointer', transition: 'transform 0.1s'
           }}
         >
-          <span style={{ fontSize: '16px', fontWeight: 'bold', color: '#1E293B' }}>✨ 新しく相談する</span>
-          <span style={{ fontSize: '12px', color: '#64748B' }}>新しくスレッドを立てて質問や調査を開始します。</span>
+          <div style={{ width: '48px', height: '48px', borderRadius: '50%', backgroundColor: '#e0e7ff', display: 'flex', justifyContent: 'center', alignItems: 'center', fontSize: '24px' }}>
+            🎙️
+          </div>
+          <div style={{ fontWeight: 'bold', color: '#1e293b', fontSize: '14px', textAlign: 'center' }}>
+            チャット <br/><span style={{fontSize:'11px', color:'#64748b', fontWeight:'normal'}}>相談・質問する</span>
+          </div>
         </button>
-
+        
         <button
           onClick={onStartChat}
           style={{
-            padding: '16px 20px',
-            borderRadius: '20px',
-            border: 'none',
-            backgroundColor: '#1E293B',
-            color: '#FFFFFF',
-            boxShadow: '0 4px 10px rgba(0,0,0,0.1)',
-            cursor: 'pointer',
-            textAlign: 'left',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '2px'
+            flex: 1, backgroundColor: '#ffffff', borderRadius: '20px', padding: '16px', border: 'none',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.04)', display: 'flex', flexDirection: 'column',
+            alignItems: 'center', gap: '12px', cursor: 'pointer', transition: 'transform 0.1s'
           }}
         >
-          <span style={{ fontSize: '16px', fontWeight: 'bold' }}>💬 雑談する</span>
-          <span style={{ fontSize: '12px', color: '#94A3B8' }}>AIから話題を振ってほしい時に。</span>
+          <div style={{ width: '48px', height: '48px', borderRadius: '50%', backgroundColor: '#dcfce7', display: 'flex', justifyContent: 'center', alignItems: 'center', fontSize: '24px' }}>
+            💬
+          </div>
+          <div style={{ fontWeight: 'bold', color: '#1e293b', fontSize: '14px', textAlign: 'center' }}>
+            雑談 <br/><span style={{fontSize:'11px', color:'#64748b', fontWeight:'normal'}}>自由におしゃべり</span>
+          </div>
         </button>
       </div>
+
+      {/* 活動ログ（履歴）エリア */}
+      <div style={{ flex: 1, backgroundColor: '#ffffff', borderTopLeftRadius: '24px', borderTopRightRadius: '24px', padding: '20px 16px', overflowY: 'auto', boxShadow: '0 -4px 12px rgba(0,0,0,0.02)' }}>
+        <h2 style={{ fontSize: '16px', fontWeight: 'bold', color: '#334155', margin: '0 0 16px 0' }}>活動ログ</h2>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {sessions.length === 0 ? (
+            <p style={{ fontSize: '14px', color: '#94a3b8', textAlign: 'center', marginTop: '20px' }}>まだ会話履歴がありません</p>
+          ) : (
+            sessions.map(session => (
+              <button
+                key={session.session_id}
+                onClick={() => onSelectSession(session.session_id)}
+                style={{
+                  textAlign: 'left', padding: '16px', borderRadius: '16px', backgroundColor: '#f8fafc',
+                  border: '1px solid #f1f5f9', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '6px'
+                }}
+              >
+                <div style={{ fontSize: '12px', color: '#64748b' }}>
+                  {new Date(session.created_at).toLocaleDateString('ja-JP')} {new Date(session.created_at).toLocaleTimeString('ja-JP', {hour: '2-digit', minute:'2-digit'})}
+                </div>
+                <div style={{ fontSize: '14px', color: '#1e293b', fontWeight: '500', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {session.first_message}
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+      
     </div>
   );
 };
