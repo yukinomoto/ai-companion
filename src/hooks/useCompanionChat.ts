@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Type } from '@google/genai';
 import type { Schema } from '@google/genai';
 import { supabase } from '../supabaseClient';
-// 💡 外部ファイルに隔離したプロンプトをインポート
+// 💡 外部ファイルに隔離したプロンプトを読み込む
 import { SYSTEM_PROMPTS } from '../prompts';
 
 const PRIMARY_MODEL = 'gemini-3.1-flash-lite';
@@ -52,29 +52,40 @@ export const useCompanionChat = (sessionId: string | null) => {
 
   const [isMuted, setIsMuted] = useState(false);
   const isMutedRef = useRef(isMuted);
-  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // ============================================================================
+  // 💡 音声エンジンを Web Audio API に刷新（iOSの自動再生ブロック対策）
+  // ============================================================================
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const activeSourceRef = useRef<AudioBufferSourceNode | null>(null);
 
   useEffect(() => {
-    currentAudioRef.current = new Audio();
+    // コンポーネントマウント時にAudioContextを初期化
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioContextClass && !audioCtxRef.current) {
+      audioCtxRef.current = new AudioContextClass();
+    }
   }, []);
+
+  const stopAudio = () => {
+    if (activeSourceRef.current) {
+      try { activeSourceRef.current.stop(); } catch(e) {}
+      activeSourceRef.current = null;
+    }
+  };
 
   useEffect(() => {
     isMutedRef.current = isMuted;
-    if (isMuted && currentAudioRef.current) {
-      currentAudioRef.current.pause();
-    }
+    if (isMuted) stopAudio();
   }, [isMuted]);
 
+  // マイクボタンを押した瞬間に実行され、iOSのサウンド制限を「セッション中永続的に」解除する
   const unlockAudio = () => {
-    if (currentAudioRef.current) {
-      if (!currentAudioRef.current.src) {
-        currentAudioRef.current.src = "data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq";
-      }
-      currentAudioRef.current.play().then(() => {
-        currentAudioRef.current!.pause();
-      }).catch(() => {});
+    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume();
     }
   };
+  // ============================================================================
 
   const geminiKey = import.meta.env.VITE_GEMINI_API_KEY;
   const tavilyKey = import.meta.env.VITE_TAVILY_API_KEY;
@@ -110,12 +121,15 @@ export const useCompanionChat = (sessionId: string | null) => {
     loadChatHistory();
   }, [sessionId]);
 
+  // 💡 Web Audio APIを使って音声を再生する処理
   const playVoice = async (text: string): Promise<void> => {
     const gcloudApiKey = import.meta.env.VITE_GOOGLE_CLOUD_API_KEY;
-    if (!gcloudApiKey || !currentAudioRef.current) return;
+    if (!gcloudApiKey || !audioCtxRef.current) return;
+
     return new Promise(async (resolve) => {
       try {
-        currentAudioRef.current!.pause();
+        stopAudio(); // 前の音声をクリア
+
         const voiceId = selectedVoiceRef.current;
         const response = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${gcloudApiKey}`, {
           method: 'POST',
@@ -128,12 +142,37 @@ export const useCompanionChat = (sessionId: string | null) => {
         });
         const data = await response.json();
         if (!data.audioContent) { resolve(); return; }
+
+        // base64データをバイナリに変換
+        const binaryString = window.atob(data.audioContent);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        // iOS Safari互換のデコード処理
+        const audioBuffer = await new Promise<AudioBuffer>((res, rej) => {
+          audioCtxRef.current!.decodeAudioData(bytes.buffer, res, rej);
+        });
+
+        const source = audioCtxRef.current!.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioCtxRef.current!.destination);
+        source.onended = () => resolve();
         
-        currentAudioRef.current!.src = `data:audio/mp3;base64,${data.audioContent}`;
-        currentAudioRef.current!.onended = () => resolve();
-        currentAudioRef.current!.onerror = () => resolve();
-        currentAudioRef.current!.play().catch(() => resolve());
-      } catch (err) { resolve(); }
+        activeSourceRef.current = source;
+
+        // 再生前にコンテキストが停止していれば再開させる
+        if (audioCtxRef.current!.state === 'suspended') {
+           await audioCtxRef.current!.resume();
+        }
+        
+        source.start(0);
+      } catch (err) { 
+        console.error("音声再生エラー:", err);
+        resolve(); 
+      }
     });
   };
 
@@ -167,7 +206,7 @@ export const useCompanionChat = (sessionId: string | null) => {
           model: currentModel,
           contents: `【記憶】\n${chatContextText}\n【入力】\n"${userText}"`,
           config: { 
-            systemInstruction: SYSTEM_PROMPTS.RECEIVER, // 💡 外部ファイルから参照
+            systemInstruction: SYSTEM_PROMPTS.RECEIVER, 
             responseMimeType: "application/json", 
             responseSchema: api1Schema 
           }
@@ -179,6 +218,7 @@ export const useCompanionChat = (sessionId: string | null) => {
         setMessages((prev) => [...prev, { id: api1MessageId, sender: 'ai', text: api1Result.quick_response, isQuickResponse: true }]);
 
         let quickSpeechPromise = Promise.resolve();
+        // 💡 音声入力(マイク)からの送信だった場合は、相槌を音声で再生
         if (isVoiceInput && !isMutedRef.current) quickSpeechPromise = playVoice(api1Result.quick_response);
 
         let webContext = "（未実行）";
@@ -187,13 +227,13 @@ export const useCompanionChat = (sessionId: string | null) => {
         const api2Response = await ai.models.generateContent({
           model: currentModel,
           contents: `【記憶】\n${chatContextText}\n【検索結果】\n${webContext}\n【ユーザーの入力】\n"${api1Result.corrected_query}"`,
-          config: { systemInstruction: SYSTEM_PROMPTS.THINKER } // 💡 外部ファイルから参照
+          config: { systemInstruction: SYSTEM_PROMPTS.THINKER }
         });
 
         const api3Response = await ai.models.generateContent({
           model: currentModel,
           contents: `【ドラフト】\n"${api2Response.text}"\n--- 前提データ ---\n【直前の相槌】\n"${api1Result.quick_response}"`,
-          config: { systemInstruction: SYSTEM_PROMPTS.EDITOR } // 💡 外部ファイルから参照
+          config: { systemInstruction: SYSTEM_PROMPTS.EDITOR }
         });
 
         const finalAnswer = api3Response.text || '言葉にまとめられなかった。';
@@ -202,6 +242,7 @@ export const useCompanionChat = (sessionId: string | null) => {
           setMessages((prev) => prev.map((msg) => msg.id === api1MessageId ? { ...msg, isQuickResponse: false } : msg));
           setMessages((prev) => [...prev, { id: api2MessageId, sender: 'ai', text: finalAnswer, isQuickResponse: false }]);
 
+          // 💡 メイン回答の音声再生
           if (isVoiceInput && !isMutedRef.current) {
             await Promise.race([quickSpeechPromise, new Promise(resolve => setTimeout(resolve, 3000))]);
             if (!isMutedRef.current) playVoice(finalAnswer);
