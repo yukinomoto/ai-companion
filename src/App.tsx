@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useCompanionChat, VOICE_PRESETS } from './hooks/useCompanionChat';
 import { ChatInput } from './components/ChatInput';
 import { Home } from './components/Home';
