@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Type } from '@google/genai';
 import type { Schema } from '@google/genai';
 import { supabase } from '../supabaseClient';
-// 💡 外部ファイルに隔離したプロンプトを読み込む
 import { SYSTEM_PROMPTS } from '../prompts';
 
 const PRIMARY_MODEL = 'gemini-3.1-flash-lite';
@@ -41,6 +40,16 @@ const api1Schema: Schema = {
   required: ["quick_response", "user_display_text", "corrected_query", "requires_search"],
 };
 
+// ============================================================================
+// 💡 iOS Safariブロック突破用の「グローバル音声要素（シングルトン）」
+// Reactの再描画で消えないよう、外側に1つだけ作って使い回す
+// ============================================================================
+const SILENT_MP3 = "data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq";
+let globalAudio: HTMLAudioElement | null = null;
+if (typeof window !== 'undefined') {
+  globalAudio = new Audio();
+}
+
 export const useCompanionChat = (sessionId: string | null) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -53,39 +62,25 @@ export const useCompanionChat = (sessionId: string | null) => {
   const [isMuted, setIsMuted] = useState(false);
   const isMutedRef = useRef(isMuted);
 
-  // ============================================================================
-  // 💡 音声エンジンを Web Audio API に刷新（iOSの自動再生ブロック対策）
-  // ============================================================================
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const activeSourceRef = useRef<AudioBufferSourceNode | null>(null);
-
-  useEffect(() => {
-    // コンポーネントマウント時にAudioContextを初期化
-    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-    if (AudioContextClass && !audioCtxRef.current) {
-      audioCtxRef.current = new AudioContextClass();
-    }
-  }, []);
-
-  const stopAudio = () => {
-    if (activeSourceRef.current) {
-      try { activeSourceRef.current.stop(); } catch(e) {}
-      activeSourceRef.current = null;
-    }
-  };
-
   useEffect(() => {
     isMutedRef.current = isMuted;
-    if (isMuted) stopAudio();
+    if (isMuted && globalAudio) {
+      globalAudio.pause();
+    }
   }, [isMuted]);
 
-  // マイクボタンを押した瞬間に実行され、iOSのサウンド制限を「セッション中永続的に」解除する
+  // 💡 マイクの停止ボタン等を押した【瞬間（同期処理中）】に呼ばれる関数。
+  // 無音のMP3を再生することで、この globalAudio 要素がiOSから「再生許可」を得る
   const unlockAudio = () => {
-    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
-      audioCtxRef.current.resume();
+    if (globalAudio) {
+      // 既にAIが喋っている最中なら邪魔しない
+      const isPlaying = globalAudio.currentTime > 0 && !globalAudio.paused && !globalAudio.ended;
+      if (!isPlaying) {
+        globalAudio.src = SILENT_MP3;
+        globalAudio.play().catch(() => {});
+      }
     }
   };
-  // ============================================================================
 
   const geminiKey = import.meta.env.VITE_GEMINI_API_KEY;
   const tavilyKey = import.meta.env.VITE_TAVILY_API_KEY;
@@ -121,15 +116,13 @@ export const useCompanionChat = (sessionId: string | null) => {
     loadChatHistory();
   }, [sessionId]);
 
-  // 💡 Web Audio APIを使って音声を再生する処理
   const playVoice = async (text: string): Promise<void> => {
     const gcloudApiKey = import.meta.env.VITE_GOOGLE_CLOUD_API_KEY;
-    if (!gcloudApiKey || !audioCtxRef.current) return;
-
+    if (!gcloudApiKey || !globalAudio) return;
+    
     return new Promise(async (resolve) => {
       try {
-        stopAudio(); // 前の音声をクリア
-
+        globalAudio!.pause();
         const voiceId = selectedVoiceRef.current;
         const response = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${gcloudApiKey}`, {
           method: 'POST',
@@ -142,37 +135,16 @@ export const useCompanionChat = (sessionId: string | null) => {
         });
         const data = await response.json();
         if (!data.audioContent) { resolve(); return; }
-
-        // base64データをバイナリに変換
-        const binaryString = window.atob(data.audioContent);
-        const len = binaryString.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-        }
-
-        // iOS Safari互換のデコード処理
-        const audioBuffer = await new Promise<AudioBuffer>((res, rej) => {
-          audioCtxRef.current!.decodeAudioData(bytes.buffer, res, rej);
+        
+        // 💡 すでに unlock されている要素の src を書き換えて再生するから、iOSでも100%鳴る
+        globalAudio!.src = `data:audio/mp3;base64,${data.audioContent}`;
+        globalAudio!.onended = () => resolve();
+        globalAudio!.onerror = () => resolve();
+        globalAudio!.play().catch((e) => {
+          console.error("音声再生ブロック:", e);
+          resolve();
         });
-
-        const source = audioCtxRef.current!.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(audioCtxRef.current!.destination);
-        source.onended = () => resolve();
-        
-        activeSourceRef.current = source;
-
-        // 再生前にコンテキストが停止していれば再開させる
-        if (audioCtxRef.current!.state === 'suspended') {
-           await audioCtxRef.current!.resume();
-        }
-        
-        source.start(0);
-      } catch (err) { 
-        console.error("音声再生エラー:", err);
-        resolve(); 
-      }
+      } catch (err) { resolve(); }
     });
   };
 
@@ -218,7 +190,7 @@ export const useCompanionChat = (sessionId: string | null) => {
         setMessages((prev) => [...prev, { id: api1MessageId, sender: 'ai', text: api1Result.quick_response, isQuickResponse: true }]);
 
         let quickSpeechPromise = Promise.resolve();
-        // 💡 音声入力(マイク)からの送信だった場合は、相槌を音声で再生
+        // 💡 録音停止ボタンからの送信だった場合のみ、相槌を再生
         if (isVoiceInput && !isMutedRef.current) quickSpeechPromise = playVoice(api1Result.quick_response);
 
         let webContext = "（未実行）";

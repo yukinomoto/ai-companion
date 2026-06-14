@@ -5,7 +5,7 @@ interface ChatInputProps {
   isLoading: boolean;
   isMuted: boolean;
   setIsMuted: (muted: boolean) => void;
-  unlockAudio: () => void; // 💡 追加
+  unlockAudio: () => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, isMuted, setIsMuted, unlockAudio }) => {
@@ -58,7 +58,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    unlockAudio(); // 💡 送信時にもアンロックを実行
+    unlockAudio(); // 💡 送信ボタンを押した瞬間にアンロック（同期処理）
     if (!text.trim() || isLoading) return;
     if (isRecording && recognitionRef.current) {
       isManualStopRef.current = true;
@@ -70,7 +70,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
   };
 
   const toggleRecording = () => {
-    unlockAudio(); // 💡 マイクボタンを押した瞬間にアンロックを実行
+    unlockAudio(); // 💡 マイク/停止ボタンを押した瞬間にアンロック（同期処理）
     if (!recognitionRef.current || isLoading) return;
     if (isRecording) {
       isManualStopRef.current = true;
