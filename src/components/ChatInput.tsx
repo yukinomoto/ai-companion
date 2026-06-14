@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 interface ChatInputProps {
   onSendMessage: (text: string, isVoice: boolean) => void;
@@ -9,12 +9,81 @@ interface ChatInputProps {
 
 export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, isMuted, setIsMuted }) => {
   const [text, setText] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
+  // 💡 最新のテキスト状態を onend イベント内で参照するための Ref
+  const textRef = useRef(text);
+  useEffect(() => {
+    textRef.current = text;
+  }, [text]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        
+        // 💡 手動でストップを押すまで聞き続ける（continuous = true）
+        recognition.continuous = true;
+        recognition.interimResults = false;
+        recognition.lang = 'ja-JP';
+
+        // 音声を認識するたびに、入力欄のテキストに追記していく
+        recognition.onresult = (event: any) => {
+          let currentTranscript = '';
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            currentTranscript += event.results[i][0].transcript;
+          }
+          if (currentTranscript) {
+            setText((prev) => prev + currentTranscript);
+          }
+        };
+
+        recognition.onerror = () => setIsRecording(false);
+
+        // 💡 手動で停止（stop）した時に呼ばれ、テキストがあれば自動送信する
+        recognition.onend = () => {
+          setIsRecording(false);
+          if (textRef.current.trim()) {
+            onSendMessage(textRef.current, true);
+            setText('');
+          }
+        };
+
+        recognitionRef.current = recognition;
+      }
+    }
+  }, [onSendMessage]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!text.trim() || isLoading) return;
-    onSendMessage(text, false);
-    setText('');
+    
+    // もし録音中にエンターキー等で送信されたら録音を止める（onendが発火して送信される）
+    if (isRecording && recognitionRef.current) {
+      recognitionRef.current.stop();
+    } else {
+      onSendMessage(text, false);
+      setText('');
+    }
+  };
+
+  const toggleRecording = () => {
+    if (!recognitionRef.current || isLoading) return;
+
+    if (isRecording) {
+      // 💡 録音中なら停止（stopを呼ぶと onend が発火し、上で書いた送信処理が走る）
+      recognitionRef.current.stop();
+    } else {
+      setText(''); // 新しく録音を始める時は入力欄を一旦クリア
+      try {
+        recognitionRef.current.start();
+        setIsRecording(true);
+      } catch (error) {
+        console.error("音声認識の開始に失敗しました", error);
+      }
+    }
   };
 
   return (
@@ -33,7 +102,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
         {isMuted ? '🔇' : '🔊'}
       </button>
 
-      {/* 💡 カプセル型の入力エリア */}
       <form onSubmit={handleSubmit} style={{ 
         flex: 1, display: 'flex', gap: '8px', alignItems: 'center', 
         backgroundColor: '#f8fafc', borderRadius: '30px', padding: '6px 6px 6px 20px', 
@@ -43,13 +111,26 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
           type="text" 
           value={text} 
           onChange={(e) => setText(e.target.value)} 
-          placeholder="メッセージを入力..." 
+          placeholder={isRecording ? "音声を聞き取っています..." : "メッセージを入力..."} 
           disabled={isLoading}
           style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: '15px', color: '#1e293b' }}
         />
         
-        {/* テキストがある時は黒い紙飛行機、無い時は青いマイク */}
-        {text.trim() ? (
+        {/* 💡 UIの出し分けロジック
+          1. 録音中：必ず赤い停止（⏹️）ボタン
+          2. テキスト入力あり（未録音）：黒い送信（➤）ボタン
+          3. テキストなし（未録音）：青いマイク（🎙️）ボタン
+        */}
+        {isRecording ? (
+          <button 
+            type="button"
+            disabled={isLoading} 
+            onClick={toggleRecording}
+            style={{ background: '#ef4444', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background-color 0.2s' }}
+          >
+            ⏹️
+          </button>
+        ) : text.trim() ? (
           <button 
             type="submit" 
             disabled={isLoading} 
@@ -61,14 +142,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
           <button 
             type="button"
             disabled={isLoading} 
-            onClick={() => alert('音声入力は現在開発中です！')}
+            onClick={toggleRecording}
             style={{ background: '#3b82f6', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           >
             🎙️
           </button>
         )}
       </form>
-      
     </div>
   );
 };
