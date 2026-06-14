@@ -3,9 +3,9 @@ import { GoogleGenAI, Type } from '@google/genai';
 import type { Schema } from '@google/genai';
 import { supabase } from '../supabaseClient';
 
-// 💡 安定版の1.5-flashを確実なバックアップに指定
+// 💡 yukinomotoさんの設計通り、最新の3.1-liteを最優先に、旧版の2.5-liteをバックアップに正しく設定
 const PRIMARY_MODEL = 'gemini-3.1-flash-lite';
-const BACKUP_MODEL = 'gemini-2.5-flash';
+const BACKUP_MODEL = 'gemini-2.5-flash-lite';
 
 export const VOICE_PRESETS = [
   { id: 'ja-JP-Neural2-B', name: 'ハツラツ（女性）' },
@@ -216,7 +216,7 @@ export const useCompanionChat = (sessionId: string | null) => {
           contents: `【記憶】\n${chatContextText}\n【検索結果】\n${webContext}\n【ユーザーの入力】\n"${api1Result.corrected_query}"`,
           config: { 
             systemInstruction: `あなたはユーザーの専属AIコンパニオンです。ユーザーの入力に対して、親しみやすいタメ口で、正確で誠実な回答の「原稿素材」を作成してください。
-あなた自身がAIであることは隠さず、ロボット型の相棒として振る舞ってください。小説や台本を書いたり、メタ的なコメントを書くことは絶対に禁止します。` 
+            あなた自身がAIであることは隠さず、ロボット型の相棒として振る舞ってください。小説や台本を書いたり、メタ的なコメントを書くことは絶対に禁止します。` 
           }
         });
 
