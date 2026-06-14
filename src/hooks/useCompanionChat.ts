@@ -180,8 +180,6 @@ export const useCompanionChat = (sessionId: string | null) => {
 
     const runPipeline = async (): Promise<boolean> => {
       try {
-        const now = new Date();
-        const fullTimeContext = `JST: ${now.toLocaleDateString('ja-JP')} ${now.toLocaleTimeString('ja-JP')}`;
         const chatContextText = messages.slice(-10).map(msg => `${msg.sender === 'user' ? 'User' : 'AI'}: ${msg.text}`).join('\n');
 
         // 👑【プロンプト復元】API①：音声エラー＆文脈補正モジュール

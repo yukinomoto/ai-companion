@@ -1,6 +1,6 @@
 import React from 'react';
 
-export const Robot: React.FC<{ mood?: string }> = ({ mood = 'happy' }) => {
+export const Robot: React.FC = () => {
   return (
     <div className="robot-container" style={{
       width: '200px',
