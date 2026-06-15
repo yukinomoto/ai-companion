@@ -12,22 +12,15 @@ const api1Schema: Schema = {
   required: ["quick_response", "user_display_text", "corrected_query", "requires_search"],
 };
 
+// 💡 interests を追加した最強のスキーマ
 const memorySchema: Schema = {
   type: Type.OBJECT,
   properties: {
-    memories: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          content: { type: Type.STRING },
-          category: { type: Type.STRING }
-        },
-        required: ["content", "category"]
-      }
-    }
-  },
-  required: ["memories"]
+    memories: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { content: { type: Type.STRING }, category: { type: Type.STRING } } } },
+    follow_ups: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { topic: { type: Type.STRING }, context: { type: Type.STRING }, is_resolved: { type: Type.BOOLEAN } } } },
+    user_dictionary: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { term: { type: Type.STRING }, meaning: { type: Type.STRING } } } },
+    interests: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { topic: { type: Type.STRING } } } }
+  }
 };
 
 export const aiService = {
@@ -51,19 +44,26 @@ export const aiService = {
     chatContextText: string,
     tavilyKey: string,
     longTermMemories: string[],
+    followUps: string[],
+    dictionary: string[],
+    interests: string[], // 💡 引数追加
     onApi1Complete: (result: { quick_response: string; user_display_text: string; requires_search: boolean; corrected_query: string }) => void,
     onApi3Complete: (finalAnswer: string) => void,
-    onMemoryExtracted: (extracted: { content: string; category: string }[]) => void
+    onMemoryExtracted: (extracted: any) => void
   ) => {
     
-    const memoriesContext = longTermMemories.length > 0 
-      ? longTermMemories.map(m => `- ${m}`).join('\n') 
-      : '（過去の記憶はまだありません）';
+    const now = new Date();
+    const days = ['日', '月', '火', '水', '木', '金', '土'];
+    const currentDateStr = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日(${days[now.getDay()]}) ${now.getHours()}時${now.getMinutes()}分`;
 
-    // 💡 インプットのラベルを「ユーザーに関する長期記憶」に変更
+    const memoriesContext = longTermMemories.length > 0 ? longTermMemories.map(m => `- ${m}`).join('\n') : 'なし';
+    const followUpsContext = followUps.length > 0 ? followUps.map(f => `- ${f}`).join('\n') : 'なし';
+    const dictContext = dictionary.length > 0 ? dictionary.map(d => `- ${d}`).join('\n') : 'なし';
+    const interestsContext = interests.length > 0 ? interests.map(i => `- ${i}`).join('\n') : 'なし'; // 💡 追加
+
     const api1Response = await ai.models.generateContent({
       model,
-      contents: `【ユーザーに関する長期記憶】\n${memoriesContext}\n\n【記憶（会話履歴）】\n${chatContextText}\n\n【入力】\n"${userText}"`,
+      contents: `【現在日時】\n${currentDateStr}\n\n【ユーザーに関する長期記憶】\n${memoriesContext}\n【未解決の話題】\n${followUpsContext}\n【ユーザー辞書】\n${dictContext}\n【ユーザーの興味・関心】\n${interestsContext}\n\n【会話履歴】\n${chatContextText}\n\n【入力】\n"${userText}"`,
       config: { systemInstruction: SYSTEM_PROMPTS.RECEIVER, responseMimeType: "application/json", responseSchema: api1Schema }
     });
     const api1Result = JSON.parse(api1Response.text || '{}');
@@ -76,7 +76,7 @@ export const aiService = {
 
     const api2Response = await ai.models.generateContent({
       model,
-      contents: `【ユーザーに関する長期記憶】\n${memoriesContext}\n\n【会話文脈】\n${chatContextText}\n\n【検索結果】\n${webContext}\n\n【ユーザーの入力】\n"${api1Result.corrected_query}"`,
+      contents: `【現在日時】\n${currentDateStr}\n\n【ユーザーに関する長期記憶】\n${memoriesContext}\n【未解決の話題】\n${followUpsContext}\n【ユーザー辞書】\n${dictContext}\n【ユーザーの興味・関心】\n${interestsContext}\n\n【会話文脈】\n${chatContextText}\n【検索結果】\n${webContext}\n【ユーザーの入力】\n"${api1Result.corrected_query}"`,
       config: { systemInstruction: SYSTEM_PROMPTS.THINKER }
     });
 
@@ -91,16 +91,12 @@ export const aiService = {
     try {
       const api4Response = await ai.models.generateContent({
         model,
-        contents: `【これまでの会話文脈】\n${chatContextText}\n\n【今回のユーザーの実際の発言】\n"${userText}"\n\n【今回のAIの最終回答】\n"${finalAnswer}"`,
+        contents: `【現在日時】\n${currentDateStr}\n\n【これまでの会話文脈】\n${chatContextText}\n\n【今回のユーザーの実際の発言】\n"${userText}"\n\n【今回のAIの最終回答】\n"${finalAnswer}"`,
         config: { systemInstruction: SYSTEM_PROMPTS.EXTRACTOR, responseMimeType: "application/json", responseSchema: memorySchema }
       });
       const api4Result = JSON.parse(api4Response.text || '{}');
-      
       console.log("🧠 記憶抽出AIの結果:", api4Result);
-
-      if (api4Result.memories && api4Result.memories.length > 0) {
-        onMemoryExtracted(api4Result.memories);
-      }
+      onMemoryExtracted(api4Result);
     } catch (e) {
       console.error("記憶の抽出に失敗しました:", e);
     }

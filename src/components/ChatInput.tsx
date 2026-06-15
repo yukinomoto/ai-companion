@@ -8,20 +8,16 @@ interface ChatInputProps {
   unlockAudio: () => void;
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, isMuted, setIsMuted, unlockAudio }) => {
+export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, unlockAudio }) => {
   const [text, setText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const recognitionRef = useRef<any>(null);
 
   const textRef = useRef(text);
   useEffect(() => { textRef.current = text; }, [text]);
-  
   const onSendMessageRef = useRef(onSendMessage);
   useEffect(() => { onSendMessageRef.current = onSendMessage; }, [onSendMessage]);
-
   const isManualStopRef = useRef(false);
-  
-  // 💡 核心の修正：一度でもマイク入力が始まったら、送信が完了するまで音声入力中フラグを維持する
   const wasVoiceInputRef = useRef(false);
 
   useEffect(() => {
@@ -40,31 +36,25 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
           }
           if (currentTranscript) { 
             setText((prev) => prev + currentTranscript); 
-            // 文字が拾えた時点で「音声対話」であることを確定させる
             wasVoiceInputRef.current = true;
           }
         };
-
         recognition.onerror = () => setIsRecording(false);
-
         recognition.onend = () => {
           setIsRecording(false);
-          // 手動で赤い⏹️ボタンを押して終了した場合のみ、その場で即時自動送信
           if (isManualStopRef.current) {
             if (textRef.current.trim()) {
               onSendMessageRef.current(textRef.current, wasVoiceInputRef.current);
               setText('');
-              wasVoiceInputRef.current = false; // 送信完了したのでリセット
+              wasVoiceInputRef.current = false;
             }
             isManualStopRef.current = false;
           }
-          // 💡 スマホが勝手に無音検知で止めた場合は、isManualStopRef が false なのでここでは送信されない。
-          // ただし wasVoiceInputRef.current = true のまま文字が残るため、次の手動「➤」送信時に音声として扱われる！
         };
         recognitionRef.current = recognition;
       }
     }
-    return () => { if (recognitionRef.current) { recognitionRef.current.abort(); } };
+    return () => { if (recognitionRef.current) recognitionRef.current.abort(); };
   }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -76,10 +66,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
       isManualStopRef.current = true;
       recognitionRef.current.stop();
     } else {
-      // 💡 手動で「➤」ボタンを押した場合も、wasVoiceInputRef の状態を正しく引き継いで送信
       onSendMessage(text, wasVoiceInputRef.current);
       setText('');
-      wasVoiceInputRef.current = false; // リセット
+      wasVoiceInputRef.current = false;
     }
   };
 
@@ -92,30 +81,59 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
     } else {
       setText(''); 
       isManualStopRef.current = false;
-      wasVoiceInputRef.current = true; // マイクを起動した時点でフラグをON
-      try {
-        recognitionRef.current.start();
-        setIsRecording(true);
-      } catch (error) {}
+      wasVoiceInputRef.current = true;
+      try { recognitionRef.current.start(); setIsRecording(true); } catch (e) {}
     }
   };
 
   return (
-    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-      <button onClick={() => { unlockAudio(); setIsMuted(!isMuted); }} style={{ background: isMuted ? '#f1f5f9' : '#e0f2fe', border: 'none', width: '44px', height: '44px', borderRadius: '50%', cursor: 'pointer', fontSize: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: isMuted ? '#94a3b8' : '#0ea5e9' }}>
-        {isMuted ? '🔇' : '🔊'}
+    <form onSubmit={handleSubmit} style={{ 
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
+      background: 'rgba(255, 255, 255, 0.9)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
+      padding: '10px 16px', borderRadius: '40px', border: '1px solid rgba(255,255,255,1)',
+      boxShadow: '0 12px 32px rgba(0,0,0,0.08)' 
+    }}>
+      
+      {/* 💡 キーボードアイコン (SVG) */}
+      <button type="button" style={{ background: 'none', border: 'none', padding: '8px', cursor: 'pointer', display: 'flex' }}>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect>
+          <line x1="6" y1="8" x2="6.01" y2="8"></line><line x1="10" y1="8" x2="10.01" y2="8"></line><line x1="14" y1="8" x2="14.01" y2="8"></line><line x1="18" y1="8" x2="18.01" y2="8"></line>
+          <line x1="6" y1="12" x2="6.01" y2="12"></line><line x1="10" y1="12" x2="10.01" y2="12"></line><line x1="14" y1="12" x2="14.01" y2="12"></line><line x1="18" y1="12" x2="18.01" y2="12"></line>
+          <line x1="8" y1="16" x2="16" y2="16"></line>
+        </svg>
       </button>
 
-      <form onSubmit={handleSubmit} style={{ flex: 1, display: 'flex', gap: '8px', alignItems: 'center', backgroundColor: '#f8fafc', borderRadius: '30px', padding: '6px 6px 6px 20px', border: '1px solid #e2e8f0' }}>
-        <input type="text" value={text} onChange={(e) => setText(e.target.value)} placeholder={isRecording ? "音声を認識中..." : "メッセージを入力..."} disabled={isLoading} style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: '15px', color: '#1e293b' }} />
+      {/* テキスト入力 */}
+      <input 
+        type="text" className="selectable-text" value={text} onChange={(e) => setText(e.target.value)} 
+        placeholder={isRecording ? "聞き取り中..." : "話しかけてみる..."} disabled={isLoading} 
+        style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: '15px', color: '#1e293b', fontWeight: 500, textAlign: 'center' }} 
+      />
+
+      {/* 💡 マイクボタン (グラデーション背景 + SVG) */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         {isRecording ? (
-          <button type="button" disabled={isLoading} onClick={toggleRecording} style={{ background: '#ef4444', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background-color 0.2s' }}>⏹️</button>
+          <button type="button" disabled={isLoading} onClick={toggleRecording} style={{ background: '#ef4444', border: 'none', width: '48px', height: '48px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(239,68,68,0.3)' }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect></svg>
+          </button>
         ) : text.trim() ? (
-          <button type="submit" disabled={isLoading} style={{ background: '#0f172a', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>➤</button>
+          <button type="submit" disabled={isLoading} style={{ background: 'linear-gradient(135deg, #6366f1, #3b82f6)', border: 'none', width: '48px', height: '48px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 16px rgba(59,130,246,0.3)' }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+          </button>
         ) : (
-          <button type="button" disabled={isLoading} onClick={toggleRecording} style={{ background: '#3b82f6', color: '#fff', border: 'none', width: '38px', height: '38px', borderRadius: '50%', cursor: 'pointer', fontSize: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🎙️</button>
+          <button type="button" disabled={isLoading} onClick={toggleRecording} style={{ background: 'linear-gradient(135deg, #8b5cf6, #3b82f6)', border: 'none', width: '48px', height: '48px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 6px 16px rgba(59,130,246,0.35)' }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+          </button>
         )}
-      </form>
-    </div>
+      </div>
+
+      {/* 💡 画像アイコン (SVG) */}
+      <button type="button" onClick={() => alert("画像認識は開発中です")} style={{ background: 'none', border: 'none', padding: '8px', cursor: 'pointer', display: 'flex' }}>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline>
+        </svg>
+      </button>
+    </form>
   );
 };

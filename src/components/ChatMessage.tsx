@@ -26,7 +26,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
         {/* API①が返した相槌状態のときだけ「思考中」のインジケータを出す */}
         {message.isQuickResponse && (
           <div className="flex items-center justify-end gap-1 mt-1 text-[10px] text-gray-400 font-normal">
-            <span>🤖 思考中</span>
+            <span>思考中</span>
             <span className="flex h-1 w-1 relative">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-1 w-1 bg-blue-500"></span>

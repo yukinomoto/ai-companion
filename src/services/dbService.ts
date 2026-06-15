@@ -2,7 +2,6 @@ import { supabase } from '../supabaseClient';
 import type { ChatSession, Message } from '../hooks/useCompanionChat';
 
 export const dbService = {
-  // セッション一覧の読み込み
   getSessions: async (): Promise<ChatSession[]> => {
     const { data, error } = await supabase.from('chat_messages').select('session_id, text, created_at, sender').order('created_at', { ascending: true });
     if (error || !data) return [];
@@ -16,7 +15,6 @@ export const dbService = {
     return Object.values(uniqueSessions).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   },
 
-  // 特定セッションの会話履歴読み込み
   getChatHistory: async (sessionId: string): Promise<Message[]> => {
     const { data, error } = await supabase.from('chat_messages').select('id, sender, text').eq('session_id', sessionId).order('created_at', { ascending: true }).limit(50);
     if (error || !data) return [];
@@ -28,24 +26,57 @@ export const dbService = {
     }));
   },
 
-  // メッセージの保存
   saveMessage: async (id: string, sessionId: string, sender: 'user' | 'ai', text: string) => {
     await supabase.from('chat_messages').insert([{ id, session_id: sessionId, sender, text }]);
   },
 
-  // 💡 既存の `long_term_memories` テーブルから記憶を読み込む
-  getMemories: async (): Promise<{ content: string; category: string }[]> => {
-    const { data, error } = await supabase.from('long_term_memories').select('content, category');
-    if (error || !data) return [];
-    return data;
+  getMemories: async () => {
+    const { data } = await supabase.from('long_term_memories').select('content, category');
+    return data || [];
+  },
+  getFollowUps: async (): Promise<{topic: string; context: string; is_resolved: boolean; created_at?: string}[]> => {
+    const { data } = await supabase.from('follow_ups').select('topic, context, is_resolved, created_at').eq('is_resolved', false);
+    return data || [];
+  },
+  getDictionary: async () => {
+    const { data } = await supabase.from('user_dictionary').select('term, meaning');
+    return data || [];
+  },
+  // 💡 追加: 興味関心データの取得
+  getInterests: async () => {
+    const { data } = await supabase.from('interests').select('topic, interest_level').order('interest_level', { ascending: false }).limit(10);
+    return data || [];
   },
 
-  // 💡 既存の `long_term_memories` テーブルに新しい記憶を保存する
   saveMemory: async (content: string, category: string) => {
-    // 同じ記憶の重複保存を防ぐチェック
-    const { data } = await supabase.from('long_term_memories').select('id').eq('content', content);
-    if (data && data.length > 0) return; // 既に同じ記憶があればスキップ
-
-    await supabase.from('long_term_memories').insert([{ content, category }]);
+    const { data } = await supabase.from('long_term_memories').select('id').eq('content', content).maybeSingle();
+    if (data) return;
+    await supabase.from('long_term_memories').insert([{ content, category: category || 'トピック' }]);
+  },
+  saveFollowUp: async (topic: string, context: string, is_resolved: boolean) => {
+    if (!topic) return;
+    const safeContext = context || '';
+    const { data } = await supabase.from('follow_ups').select('id').eq('topic', topic).maybeSingle();
+    if (data) {
+      await supabase.from('follow_ups').update({ context: safeContext, is_resolved }).eq('id', data.id);
+    } else {
+      await supabase.from('follow_ups').insert([{ topic, context: safeContext, is_resolved }]);
+    }
+  },
+  saveDictionary: async (term: string, meaning: string) => {
+    if (!term || !meaning) return;
+    const { data } = await supabase.from('user_dictionary').select('id').eq('term', term).maybeSingle();
+    if (data) return;
+    await supabase.from('user_dictionary').insert([{ term, meaning }]);
+  },
+  // 💡 追加: 興味関心データの保存（既存ならレベルUP）
+  saveInterest: async (topic: string) => {
+    if (!topic) return;
+    const { data } = await supabase.from('interests').select('id, interest_level').eq('topic', topic).maybeSingle();
+    if (data) {
+      await supabase.from('interests').update({ interest_level: (data.interest_level || 1) + 1 }).eq('id', data.id);
+    } else {
+      await supabase.from('interests').insert([{ topic, interest_level: 1 }]);
+    }
   }
 };

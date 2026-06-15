@@ -31,18 +31,36 @@ export const useCompanionChat = (sessionId: string | null) => {
   const [isMuted, setIsMuted] = useState(false);
   const isMutedRef = useRef(isMuted);
 
-  // 💡 追加：長期記憶をあらかじめ手元に持っておくための「キャッシュ」
+  // 💡 4つのキャッシュ
   const [cachedMemories, setCachedMemories] = useState<{content: string, category: string}[]>([]);
+  const [cachedFollowUps, setCachedFollowUps] = useState<{topic: string, context: string, is_resolved: boolean, created_at?: string}[]>([]);
+  const [cachedDictionary, setCachedDictionary] = useState<{term: string, meaning: string}[]>([]);
+  const [cachedInterests, setCachedInterests] = useState<{topic: string, interest_level: number}[]>([]);
+  
   const memoriesRef = useRef(cachedMemories);
+  const followUpsRef = useRef(cachedFollowUps);
+  const dictRef = useRef(cachedDictionary);
+  const interestsRef = useRef(cachedInterests);
+  
   useEffect(() => { memoriesRef.current = cachedMemories; }, [cachedMemories]);
+  useEffect(() => { followUpsRef.current = cachedFollowUps; }, [cachedFollowUps]);
+  useEffect(() => { dictRef.current = cachedDictionary; }, [cachedDictionary]);
+  useEffect(() => { interestsRef.current = cachedInterests; }, [cachedInterests]);
 
-  // 💡 アプリ（フック）が起動した瞬間に、1回だけSupabaseから記憶を先読みしておく
   useEffect(() => {
-    const preloadMemories = async () => {
-      const memories = await dbService.getMemories();
+    const preloadAllData = async () => {
+      const [memories, followUps, dictionary, interests] = await Promise.all([
+        dbService.getMemories(),
+        dbService.getFollowUps(),
+        dbService.getDictionary(),
+        dbService.getInterests()
+      ]);
       setCachedMemories(memories);
+      setCachedFollowUps(followUps);
+      setCachedDictionary(dictionary);
+      setCachedInterests(interests);
     };
-    preloadMemories();
+    preloadAllData();
   }, []);
 
   useEffect(() => {
@@ -62,11 +80,68 @@ export const useCompanionChat = (sessionId: string | null) => {
     setSessions(list);
   };
 
+  // 💡 ユウキさん発案：「AI自身の匙加減による10択ランダム生成」ロジック
+  const generateDynamicGreeting = async () => {
+    setIsLoading(true);
+    try {
+      // 記憶と関心度を文字列化（データがなければ「なし」になる）
+      const memoryStrings = memoriesRef.current.map(m => m.content).join('、') || 'なし';
+      const interestStrings = interestsRef.current.map(i => `${i.topic}(関心度:${i.interest_level})`).join('、') || 'なし';
+      
+      const prompt = `
+      あなたはユーザーの専属AIコンパニオンです。新しい会話セッションを開始します。
+      ユーザーが画面を開いた瞬間に表示する「最初の話しかけ（1〜2文程度）」の候補を10個作成し、JSONの配列形式で出力してください。
+
+      【重要な判断ルール（匙加減）】
+      以下のユーザーデータ（記憶と関心）の量と内容を分析し、10個の候補の内訳（過去の話題の続き、新しい関心事への提案、汎用的な挨拶）のバランスをあなた自身で判断（顧慮）して構成してください。
+      ・データが少ない場合は、汎用的な挨拶や調子を伺う内容を多めにしてください。
+      ・データが豊富な場合は、汎用的な挨拶は減らし、過去の文脈や関心事（直接話していなくても興味を持ちそうな事）に踏み込んだ話題を多めにしてください。
+
+      [ユーザーデータ]
+      ・記憶: ${memoryStrings}
+      ・関心事: ${interestStrings}
+
+      出力は必ず以下のJSON配列のみとしてください。
+      ["候補1", "候補2", "候補3", "候補4", "候補5", "候補6", "候補7", "候補8", "候補9", "候補10"]
+      `;
+
+      const result = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt
+      });
+      
+      const text = result.text || '';
+      const jsonMatch = text.match(/\[.*\]/s);
+      
+      if (jsonMatch) {
+        const candidates = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(candidates) && candidates.length > 0) {
+          // 💡 10個の候補からサイコロを振ってランダムに1つだけを選ぶ
+          const randomIndex = Math.floor(Math.random() * candidates.length);
+          // DBには保存せず、画面(messages)にだけ映す
+          setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: candidates[randomIndex] }]);
+        }
+      }
+    } catch (error) {
+      console.error("Greeting generation failed", error);
+      // 通信エラー時の安全網
+      setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: "やあ！調子はどう？" }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!sessionId) { refreshSessions(); return; }
     const loadHistory = async () => {
       const history = await dbService.getChatHistory(sessionId);
-      setMessages(history);
+      
+      if (history.length === 0) {
+        // 💡 過去の履歴が0件のときだけ、AIに10択から選ばせる（毎回新しい挨拶になる）
+        generateDynamicGreeting();
+      } else {
+        setMessages(history);
+      }
     };
     loadHistory();
   }, [sessionId]);
@@ -91,8 +166,13 @@ export const useCompanionChat = (sessionId: string | null) => {
       try {
         const chatContextText = messages.slice(-10).map(msg => `${msg.sender === 'user' ? 'User' : 'AI'}: ${msg.text}`).join('\n');
 
-        // 💡 修正ポイント：通信(await)をせず、手元にキャッシュされた記憶を即座に取り出す
         const memoryStrings = memoriesRef.current.map(m => m.content);
+        const followUpStrings = followUpsRef.current.map(f => {
+          const dateStr = f.created_at ? new Date(f.created_at).toLocaleDateString('ja-JP') : '過去';
+          return `[登録日: ${dateStr}] ${f.topic} - ${f.context}`;
+        });
+        const dictStrings = dictRef.current.map(d => `${d.term}: ${d.meaning}`);
+        const interestStrings = interestsRef.current.map(i => `${i.topic} (関心度: ${i.interest_level})`); 
 
         await aiService.runPipeline(
           currentModel,
@@ -100,20 +180,23 @@ export const useCompanionChat = (sessionId: string | null) => {
           userText,
           chatContextText,
           tavilyKey || '',
-          memoryStrings, 
+          memoryStrings,
+          followUpStrings,
+          dictStrings,
+          interestStrings, 
 
-          // コールバック①: 1次回答（相槌）が完成した時
           async (api1Result) => {
-            setMessages((prev) => prev.map((msg) => msg.id === userMessageId ? { ...msg, text: api1Result.user_display_text } : msg));
-            await dbService.saveMessage(userMessageId, sessionId, 'user', api1Result.user_display_text);
-            
-            setMessages((prev) => [...prev, { id: api1MessageId, sender: 'ai', text: api1Result.quick_response, isQuickResponse: true }]);
-            await dbService.saveMessage(api1MessageId, sessionId, 'ai', api1Result.quick_response);
+            setTimeout(async () => {
+              setMessages((prev) => prev.map((msg) => msg.id === userMessageId ? { ...msg, text: api1Result.user_display_text } : msg));
+              await dbService.saveMessage(userMessageId, sessionId, 'user', api1Result.user_display_text);
+              
+              setMessages((prev) => [...prev, { id: api1MessageId, sender: 'ai', text: api1Result.quick_response, isQuickResponse: true }]);
+              await dbService.saveMessage(api1MessageId, sessionId, 'ai', api1Result.quick_response);
 
-            if (isVoiceInput) playVoiceWrapper(api1Result.quick_response);
+              if (isVoiceInput) playVoiceWrapper(api1Result.quick_response);
+            }, 1000);
           },
 
-          // コールバック②: 編集長による本回答が完成した時
           (finalAnswer) => {
             setTimeout(async () => {
               setMessages((prev) => prev.map((msg) => msg.id === api1MessageId ? { ...msg, isQuickResponse: false } : msg));
@@ -126,17 +209,18 @@ export const useCompanionChat = (sessionId: string | null) => {
             }, 1200);
           },
 
-          // コールバック③: 会話から「超記憶」が新しく抽出された時
-          async (extractedMemories) => {
-            for (const memory of extractedMemories) {
-              await dbService.saveMemory(memory.content, memory.category);
-              
-              // 💡 抽出された新しい記憶を、手元のキャッシュにも追加しておく（次の会話で即使えるように）
-              setCachedMemories(prev => {
-                // 重複チェック
-                if (prev.some(p => p.content === memory.content)) return prev;
-                return [...prev, memory];
-              });
+          async (extracted) => {
+            if (extracted.memories) {
+              for (const m of extracted.memories) await dbService.saveMemory(m.content, m.category);
+            }
+            if (extracted.follow_ups) {
+              for (const f of extracted.follow_ups) await dbService.saveFollowUp(f.topic, f.context, f.is_resolved);
+            }
+            if (extracted.user_dictionary) {
+              for (const d of extracted.user_dictionary) await dbService.saveDictionary(d.term, d.meaning);
+            }
+            if (extracted.interests) {
+              for (const i of extracted.interests) await dbService.saveInterest(i.topic);
             }
           }
         );
