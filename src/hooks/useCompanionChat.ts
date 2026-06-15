@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI } from '@google/genai';
-import { audioService } from '../services/audioService';
+import { audioService, VOICE_PRESETS } from '../services/audioService';
 import { dbService } from '../services/dbService';
 import { aiService } from '../services/aiService';
-import { VOICE_PRESETS } from '../services/audioService'; // audioService側でexportしているpreset
 
 export { VOICE_PRESETS };
 
@@ -31,6 +30,20 @@ export const useCompanionChat = (sessionId: string | null) => {
 
   const [isMuted, setIsMuted] = useState(false);
   const isMutedRef = useRef(isMuted);
+
+  // 💡 追加：長期記憶をあらかじめ手元に持っておくための「キャッシュ」
+  const [cachedMemories, setCachedMemories] = useState<{content: string, category: string}[]>([]);
+  const memoriesRef = useRef(cachedMemories);
+  useEffect(() => { memoriesRef.current = cachedMemories; }, [cachedMemories]);
+
+  // 💡 アプリ（フック）が起動した瞬間に、1回だけSupabaseから記憶を先読みしておく
+  useEffect(() => {
+    const preloadMemories = async () => {
+      const memories = await dbService.getMemories();
+      setCachedMemories(memories);
+    };
+    preloadMemories();
+  }, []);
 
   useEffect(() => {
     isMutedRef.current = isMuted;
@@ -71,7 +84,6 @@ export const useCompanionChat = (sessionId: string | null) => {
     const api1MessageId = crypto.randomUUID();
     const api2MessageId = crypto.randomUUID();
 
-    // 先にユーザーの発話をローカル表示
     setMessages((prev) => [...prev, { id: userMessageId, sender: 'user', text: userText }]);
     let currentModel = 'gemini-3.1-flash-lite';
 
@@ -79,18 +91,16 @@ export const useCompanionChat = (sessionId: string | null) => {
       try {
         const chatContextText = messages.slice(-10).map(msg => `${msg.sender === 'user' ? 'User' : 'AI'}: ${msg.text}`).join('\n');
 
-        // 💡 データベースから過去の「すべての超記憶」を事前にロードする
-        const activeMemories = await dbService.getMemories();
-        const memoryStrings = activeMemories.map(m => m.content);
+        // 💡 修正ポイント：通信(await)をせず、手元にキャッシュされた記憶を即座に取り出す
+        const memoryStrings = memoriesRef.current.map(m => m.content);
 
-        // 分離したAIパイプラインを実行
         await aiService.runPipeline(
           currentModel,
           ai,
           userText,
           chatContextText,
           tavilyKey || '',
-          memoryStrings, // ➔ これをGeminiの脳(Thinker)に流し込む
+          memoryStrings, 
 
           // コールバック①: 1次回答（相槌）が完成した時
           async (api1Result) => {
@@ -118,9 +128,15 @@ export const useCompanionChat = (sessionId: string | null) => {
 
           // コールバック③: 会話から「超記憶」が新しく抽出された時
           async (extractedMemories) => {
-            // バックグラウンドで自動的にSupabaseへ新規保存
             for (const memory of extractedMemories) {
               await dbService.saveMemory(memory.content, memory.category);
+              
+              // 💡 抽出された新しい記憶を、手元のキャッシュにも追加しておく（次の会話で即使えるように）
+              setCachedMemories(prev => {
+                // 重複チェック
+                if (prev.some(p => p.content === memory.content)) return prev;
+                return [...prev, memory];
+              });
             }
           }
         );
@@ -128,7 +144,7 @@ export const useCompanionChat = (sessionId: string | null) => {
         return true;
       } catch (error) {
         if (currentModel === 'gemini-3.1-flash-lite') {
-          currentModel = 'gemini-2.5-flash-lite'; // バックアップへ切り替え
+          currentModel = 'gemini-2.5-flash-lite'; 
           return await executePipeline();
         }
         return false;
