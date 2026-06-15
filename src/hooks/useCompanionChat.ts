@@ -53,7 +53,7 @@ export const useCompanionChat = (sessionId: string | null) => {
         dbService.getMemories(),
         dbService.getFollowUps(),
         dbService.getDictionary(),
-        dbService.getInterests()
+        dbService.getInterests() // 💡 読み込み
       ]);
       setCachedMemories(memories);
       setCachedFollowUps(followUps);
@@ -80,11 +80,27 @@ export const useCompanionChat = (sessionId: string | null) => {
     setSessions(list);
   };
 
-  // 💡 ユウキさん発案：「AI自身の匙加減による10択ランダム生成」ロジック
+  // 💡 追加：挨拶ストック（プール）機能付きの動的生成ロジック
   const generateDynamicGreeting = async () => {
     setIsLoading(true);
     try {
-      // 記憶と関心度を文字列化（データがなければ「なし」になる）
+      // 1. まずローカルストレージに「未使用の挨拶ストック」があるか確認
+      const storedPool = localStorage.getItem('ai_greeting_pool');
+      let pool: string[] = storedPool ? JSON.parse(storedPool) : [];
+
+      if (pool.length > 0) {
+        // ストックがある場合：ランダムに1つ取り出して即座に表示（API消費ゼロ、待ち時間ゼロ）
+        const randomIndex = Math.floor(Math.random() * pool.length);
+        const chosenGreeting = pool[randomIndex];
+        pool.splice(randomIndex, 1); // 使ったものをストックから捨てる
+        localStorage.setItem('ai_greeting_pool', JSON.stringify(pool)); // 残りを再保存
+        
+        setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: chosenGreeting }]);
+        setIsLoading(false);
+        return;
+      }
+
+      // 2. ストックが0件の時だけ、APIを1回だけ叩いて10個の挨拶を一気に生成する
       const memoryStrings = memoriesRef.current.map(m => m.content).join('、') || 'なし';
       const interestStrings = interestsRef.current.map(i => `${i.topic}(関心度:${i.interest_level})`).join('、') || 'なし';
       
@@ -93,7 +109,7 @@ export const useCompanionChat = (sessionId: string | null) => {
       ユーザーが画面を開いた瞬間に表示する「最初の話しかけ（1〜2文程度）」の候補を10個作成し、JSONの配列形式で出力してください。
 
       【重要な判断ルール（匙加減）】
-      以下のユーザーデータ（記憶と関心）の量と内容を分析し、10個の候補の内訳（過去の話題の続き、新しい関心事への提案、汎用的な挨拶）のバランスをあなた自身で判断（顧慮）して構成してください。
+      以下のユーザーデータ（記憶と関心）の量と内容を分析し、10個の候補の内訳（過去の話題の続き、新しい関心事への提案、汎用的な挨拶）のバランスをあなた自身で判断して構成してください。
       ・データが少ない場合は、汎用的な挨拶や調子を伺う内容を多めにしてください。
       ・データが豊富な場合は、汎用的な挨拶は減らし、過去の文脈や関心事（直接話していなくても興味を持ちそうな事）に踏み込んだ話題を多めにしてください。
 
@@ -116,15 +132,20 @@ export const useCompanionChat = (sessionId: string | null) => {
       if (jsonMatch) {
         const candidates = JSON.parse(jsonMatch[0]);
         if (Array.isArray(candidates) && candidates.length > 0) {
-          // 💡 10個の候補からサイコロを振ってランダムに1つだけを選ぶ
+          // ランダムに1つ選んで表示する
           const randomIndex = Math.floor(Math.random() * candidates.length);
-          // DBには保存せず、画面(messages)にだけ映す
-          setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: candidates[randomIndex] }]);
+          const chosenGreeting = candidates[randomIndex];
+          
+          // 選ばれなかった残りの9個を、次回の起動用にストックとして保存
+          candidates.splice(randomIndex, 1);
+          localStorage.setItem('ai_greeting_pool', JSON.stringify(candidates));
+
+          setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: chosenGreeting }]);
         }
       }
     } catch (error) {
       console.error("Greeting generation failed", error);
-      // 通信エラー時の安全網
+      // セーフティネット
       setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: "やあ！調子はどう？" }]);
     } finally {
       setIsLoading(false);
@@ -136,8 +157,8 @@ export const useCompanionChat = (sessionId: string | null) => {
     const loadHistory = async () => {
       const history = await dbService.getChatHistory(sessionId);
       
+      // 💡 修正：履歴がない（新規セッション）の時のみ、ストックから挨拶を引き出す
       if (history.length === 0) {
-        // 💡 過去の履歴が0件のときだけ、AIに10択から選ばせる（毎回新しい挨拶になる）
         generateDynamicGreeting();
       } else {
         setMessages(history);
@@ -172,7 +193,7 @@ export const useCompanionChat = (sessionId: string | null) => {
           return `[登録日: ${dateStr}] ${f.topic} - ${f.context}`;
         });
         const dictStrings = dictRef.current.map(d => `${d.term}: ${d.meaning}`);
-        const interestStrings = interestsRef.current.map(i => `${i.topic} (関心度: ${i.interest_level})`); 
+        const interestStrings = interestsRef.current.map(i => `${i.topic} (関心度: ${i.interest_level})`); // 💡 パイプライン用文字列
 
         await aiService.runPipeline(
           currentModel,
@@ -183,7 +204,7 @@ export const useCompanionChat = (sessionId: string | null) => {
           memoryStrings,
           followUpStrings,
           dictStrings,
-          interestStrings, 
+          interestStrings, // 💡 AIに渡す
 
           async (api1Result) => {
             setTimeout(async () => {
@@ -219,6 +240,7 @@ export const useCompanionChat = (sessionId: string | null) => {
             if (extracted.user_dictionary) {
               for (const d of extracted.user_dictionary) await dbService.saveDictionary(d.term, d.meaning);
             }
+            // 💡 興味の保存
             if (extracted.interests) {
               for (const i of extracted.interests) await dbService.saveInterest(i.topic);
             }
