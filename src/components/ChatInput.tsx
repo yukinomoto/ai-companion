@@ -20,6 +20,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
   useEffect(() => { onSendMessageRef.current = onSendMessage; }, [onSendMessage]);
 
   const isManualStopRef = useRef(false);
+  
+  // 💡 核心の修正：一度でもマイク入力が始まったら、送信が完了するまで音声入力中フラグを維持する
+  const wasVoiceInputRef = useRef(false);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -35,20 +38,28 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
           for (let i = event.resultIndex; i < event.results.length; ++i) {
             currentTranscript += event.results[i][0].transcript;
           }
-          if (currentTranscript) { setText((prev) => prev + currentTranscript); }
+          if (currentTranscript) { 
+            setText((prev) => prev + currentTranscript); 
+            // 文字が拾えた時点で「音声対話」であることを確定させる
+            wasVoiceInputRef.current = true;
+          }
         };
 
         recognition.onerror = () => setIsRecording(false);
 
         recognition.onend = () => {
           setIsRecording(false);
+          // 手動で赤い⏹️ボタンを押して終了した場合のみ、その場で即時自動送信
           if (isManualStopRef.current) {
             if (textRef.current.trim()) {
-              onSendMessageRef.current(textRef.current, true);
+              onSendMessageRef.current(textRef.current, wasVoiceInputRef.current);
               setText('');
+              wasVoiceInputRef.current = false; // 送信完了したのでリセット
             }
             isManualStopRef.current = false;
           }
+          // 💡 スマホが勝手に無音検知で止めた場合は、isManualStopRef が false なのでここでは送信されない。
+          // ただし wasVoiceInputRef.current = true のまま文字が残るため、次の手動「➤」送信時に音声として扱われる！
         };
         recognitionRef.current = recognition;
       }
@@ -58,19 +69,22 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    unlockAudio(); // 💡 送信ボタンを押した瞬間にアンロック（同期処理）
+    unlockAudio();
     if (!text.trim() || isLoading) return;
+    
     if (isRecording && recognitionRef.current) {
       isManualStopRef.current = true;
       recognitionRef.current.stop();
     } else {
-      onSendMessage(text, false);
+      // 💡 手動で「➤」ボタンを押した場合も、wasVoiceInputRef の状態を正しく引き継いで送信
+      onSendMessage(text, wasVoiceInputRef.current);
       setText('');
+      wasVoiceInputRef.current = false; // リセット
     }
   };
 
   const toggleRecording = () => {
-    unlockAudio(); // 💡 マイク/停止ボタンを押した瞬間にアンロック（同期処理）
+    unlockAudio();
     if (!recognitionRef.current || isLoading) return;
     if (isRecording) {
       isManualStopRef.current = true;
@@ -78,6 +92,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
     } else {
       setText(''); 
       isManualStopRef.current = false;
+      wasVoiceInputRef.current = true; // マイクを起動した時点でフラグをON
       try {
         recognitionRef.current.start();
         setIsRecording(true);

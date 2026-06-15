@@ -12,7 +12,6 @@ const api1Schema: Schema = {
   required: ["quick_response", "user_display_text", "corrected_query", "requires_search"],
 };
 
-// 💡 記憶抽出用のJSONスキーマ
 const memorySchema: Schema = {
   type: Type.OBJECT,
   properties: {
@@ -32,7 +31,6 @@ const memorySchema: Schema = {
 };
 
 export const aiService = {
-  // Tavilyによる外部Web検索
   searchWeb: async (query: string, apiKey: string): Promise<string> => {
     if (!apiKey) return "（検索APIキー未設定）";
     try {
@@ -46,34 +44,30 @@ export const aiService = {
     } catch (err) { return "（検索失敗）"; }
   },
 
-  // 💡 パイプラインの実行（超記憶の読み込み・書き込みを完全統合）
   runPipeline: async (
     model: string,
     ai: GoogleGenAI,
     userText: string,
     chatContextText: string,
     tavilyKey: string,
-    longTermMemories: string[], // データベースから読み込んだ超記憶の配列
+    longTermMemories: string[],
     onApi1Complete: (result: { quick_response: string; user_display_text: string; requires_search: boolean; corrected_query: string }) => void,
     onApi3Complete: (finalAnswer: string) => void,
-    onMemoryExtracted: (extracted: { content: string; category: string }[]) => void // 記憶抽出時のコールバック
+    onMemoryExtracted: (extracted: { content: string; category: string }[]) => void
   ) => {
-    // 1. API 1 (受付モジュール) の実行 ➔ 爆速で相槌を取得
     const api1Response = await ai.models.generateContent({
       model,
       contents: `【記憶】\n${chatContextText}\n【入力】\n"${userText}"`,
       config: { systemInstruction: SYSTEM_PROMPTS.RECEIVER, responseMimeType: "application/json", responseSchema: api1Schema }
     });
     const api1Result = JSON.parse(api1Response.text || '{}');
-    onApi1Complete(api1Result); // ここで即座に相槌が画面に反映される
+    onApi1Complete(api1Result);
 
-    // 2. 必要なら外部検索を実行
     let webContext = "（未実行）";
     if (api1Result.requires_search) {
       webContext = await aiService.searchWeb(api1Result.corrected_query, tavilyKey);
     }
 
-    // 3. API 2 (推論モジュール) の実行 ➔ 脳内から【超記憶】のテキストデータをインプットに混ぜる！
     const memoriesContext = longTermMemories.length > 0 
       ? longTermMemories.map(m => `- ${m}`).join('\n') 
       : '（過去の記憶はまだありません）';
@@ -84,25 +78,24 @@ export const aiService = {
       config: { systemInstruction: SYSTEM_PROMPTS.THINKER }
     });
 
-    // 4. API 3 (編集長による最終監査) ➔ ハルシネーションやメタ発言を徹底排除
     const api3Response = await ai.models.generateContent({
       model,
       contents: `【ドラフト】\n"${api2Response.text}"\n--- 前提データ ---\n【直前の相槌】\n"${api1Result.quick_response}"`,
       config: { systemInstruction: SYSTEM_PROMPTS.EDITOR }
     });
     const finalAnswer = api3Response.text || '言葉にまとめられなかった。';
-    onApi3Complete(finalAnswer); // メイン回答の確定・描画
+    onApi3Complete(finalAnswer);
 
-    // 5. 💡 API 4 (超記憶の自動抽出) ➔ 今回の会話から残すべき記憶をバックグラウンドでパース
+    // 💡 修正ポイント：抽出用のインプットに会話の流れ（全体文脈）をすべて流し込み、情報密度を高める
     try {
       const api4Response = await ai.models.generateContent({
         model,
-        contents: `【今回の会話】\nUser: ${api1Result.user_display_text}\nAI: ${finalAnswer}`,
+        contents: `【これまでの会話文脈】\n${chatContextText}\n\n【今回のユーザーの実際の発言】\n"${userText}"\n\n【今回のAIの最終回答】\n"${finalAnswer}"`,
         config: { systemInstruction: SYSTEM_PROMPTS.EXTRACTOR, responseMimeType: "application/json", responseSchema: memorySchema }
       });
       const api4Result = JSON.parse(api4Response.text || '{}');
       if (api4Result.memories && api4Result.memories.length > 0) {
-        onMemoryExtracted(api4Result.memories); // 抽出された記憶をデータベースに引き渡す
+        onMemoryExtracted(api4Result.memories);
       }
     } catch (e) {
       console.error("記憶の抽出に失敗しました:", e);
