@@ -55,15 +55,15 @@ export const aiService = {
     onApi3Complete: (finalAnswer: string) => void,
     onMemoryExtracted: (extracted: { content: string; category: string }[]) => void
   ) => {
-    // 💡 長期記憶のテキストコンテキストを最上部で構築
+    
     const memoriesContext = longTermMemories.length > 0 
       ? longTermMemories.map(m => `- ${m}`).join('\n') 
       : '（過去の記憶はまだありません）';
 
-    // 1. API 1 (受付モジュール) の実行 ➔ 💡 ここにも最初から長期記憶を流し込む！
+    // 💡 インプットのラベルを「ユーザーに関する長期記憶」に変更
     const api1Response = await ai.models.generateContent({
       model,
-      contents: `【長期記憶（重要ファクト）】\n${memoriesContext}\n\n【記憶（会話履歴）】\n${chatContextText}\n\n【入力】\n"${userText}"`,
+      contents: `【ユーザーに関する長期記憶】\n${memoriesContext}\n\n【記憶（会話履歴）】\n${chatContextText}\n\n【入力】\n"${userText}"`,
       config: { systemInstruction: SYSTEM_PROMPTS.RECEIVER, responseMimeType: "application/json", responseSchema: api1Schema }
     });
     const api1Result = JSON.parse(api1Response.text || '{}');
@@ -74,14 +74,12 @@ export const aiService = {
       webContext = await aiService.searchWeb(api1Result.corrected_query, tavilyKey);
     }
 
-    // 2. API 2 (推論モジュール) の実行
     const api2Response = await ai.models.generateContent({
       model,
-      contents: `【長期記憶（重要ファクト）】\n${memoriesContext}\n\n【会話文脈】\n${chatContextText}\n\n【検索結果】\n${webContext}\n\n【ユーザーの入力】\n"${api1Result.corrected_query}"`,
+      contents: `【ユーザーに関する長期記憶】\n${memoriesContext}\n\n【会話文脈】\n${chatContextText}\n\n【検索結果】\n${webContext}\n\n【ユーザーの入力】\n"${api1Result.corrected_query}"`,
       config: { systemInstruction: SYSTEM_PROMPTS.THINKER }
     });
 
-    // 3. API 3 (編集長による最終監査)
     const api3Response = await ai.models.generateContent({
       model,
       contents: `【ドラフト】\n"${api2Response.text}"\n--- 前提データ ---\n【直前の相槌】\n"${api1Result.quick_response}"`,
