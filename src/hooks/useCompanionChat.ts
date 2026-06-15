@@ -53,7 +53,7 @@ export const useCompanionChat = (sessionId: string | null) => {
         dbService.getMemories(),
         dbService.getFollowUps(),
         dbService.getDictionary(),
-        dbService.getInterests() // 💡 読み込み
+        dbService.getInterests()
       ]);
       setCachedMemories(memories);
       setCachedFollowUps(followUps);
@@ -80,27 +80,23 @@ export const useCompanionChat = (sessionId: string | null) => {
     setSessions(list);
   };
 
-  // 💡 追加：挨拶ストック（プール）機能付きの動的生成ロジック
   const generateDynamicGreeting = async () => {
     setIsLoading(true);
     try {
-      // 1. まずローカルストレージに「未使用の挨拶ストック」があるか確認
       const storedPool = localStorage.getItem('ai_greeting_pool');
       let pool: string[] = storedPool ? JSON.parse(storedPool) : [];
 
       if (pool.length > 0) {
-        // ストックがある場合：ランダムに1つ取り出して即座に表示（API消費ゼロ、待ち時間ゼロ）
         const randomIndex = Math.floor(Math.random() * pool.length);
         const chosenGreeting = pool[randomIndex];
-        pool.splice(randomIndex, 1); // 使ったものをストックから捨てる
-        localStorage.setItem('ai_greeting_pool', JSON.stringify(pool)); // 残りを再保存
+        pool.splice(randomIndex, 1);
+        localStorage.setItem('ai_greeting_pool', JSON.stringify(pool)); 
         
         setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: chosenGreeting }]);
         setIsLoading(false);
         return;
       }
 
-      // 2. ストックが0件の時だけ、APIを1回だけ叩いて10個の挨拶を一気に生成する
       const memoryStrings = memoriesRef.current.map(m => m.content).join('、') || 'なし';
       const interestStrings = interestsRef.current.map(i => `${i.topic}(関心度:${i.interest_level})`).join('、') || 'なし';
       
@@ -132,11 +128,9 @@ export const useCompanionChat = (sessionId: string | null) => {
       if (jsonMatch) {
         const candidates = JSON.parse(jsonMatch[0]);
         if (Array.isArray(candidates) && candidates.length > 0) {
-          // ランダムに1つ選んで表示する
           const randomIndex = Math.floor(Math.random() * candidates.length);
           const chosenGreeting = candidates[randomIndex];
           
-          // 選ばれなかった残りの9個を、次回の起動用にストックとして保存
           candidates.splice(randomIndex, 1);
           localStorage.setItem('ai_greeting_pool', JSON.stringify(candidates));
 
@@ -145,7 +139,6 @@ export const useCompanionChat = (sessionId: string | null) => {
       }
     } catch (error) {
       console.error("Greeting generation failed", error);
-      // セーフティネット
       setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: "やあ！調子はどう？" }]);
     } finally {
       setIsLoading(false);
@@ -157,7 +150,6 @@ export const useCompanionChat = (sessionId: string | null) => {
     const loadHistory = async () => {
       const history = await dbService.getChatHistory(sessionId);
       
-      // 💡 修正：履歴がない（新規セッション）の時のみ、ストックから挨拶を引き出す
       if (history.length === 0) {
         generateDynamicGreeting();
       } else {
@@ -193,7 +185,10 @@ export const useCompanionChat = (sessionId: string | null) => {
           return `[登録日: ${dateStr}] ${f.topic} - ${f.context}`;
         });
         const dictStrings = dictRef.current.map(d => `${d.term}: ${d.meaning}`);
-        const interestStrings = interestsRef.current.map(i => `${i.topic} (関心度: ${i.interest_level})`); // 💡 パイプライン用文字列
+        const interestStrings = interestsRef.current.map(i => `${i.topic} (関心度: ${i.interest_level})`);
+
+        // 💡 パイプライン開始時刻を記録
+        const startTime = Date.now();
 
         await aiService.runPipeline(
           currentModel,
@@ -204,45 +199,66 @@ export const useCompanionChat = (sessionId: string | null) => {
           memoryStrings,
           followUpStrings,
           dictStrings,
-          interestStrings, // 💡 AIに渡す
+          interestStrings,
 
+          // ── 1次回答（クイック・レスポンス）──
           async (api1Result) => {
-            setTimeout(async () => {
+            // かかった時間を計測し、足りない分だけ待機（最大1秒）
+            const elapsed = Date.now() - startTime;
+            const delay = Math.max(0, 1000 - elapsed);
+
+            setTimeout(() => {
               setMessages((prev) => prev.map((msg) => msg.id === userMessageId ? { ...msg, text: api1Result.user_display_text } : msg));
-              await dbService.saveMessage(userMessageId, sessionId, 'user', api1Result.user_display_text);
-              
               setMessages((prev) => [...prev, { id: api1MessageId, sender: 'ai', text: api1Result.quick_response, isQuickResponse: true }]);
-              await dbService.saveMessage(api1MessageId, sessionId, 'ai', api1Result.quick_response);
 
               if (isVoiceInput) playVoiceWrapper(api1Result.quick_response);
-            }, 1000);
+
+              // 💡 UI描画をブロックさせないため、awaitせず裏側に投げる
+              dbService.saveMessage(userMessageId, sessionId, 'user', api1Result.user_display_text).catch(console.error);
+              dbService.saveMessage(api1MessageId, sessionId, 'ai', api1Result.quick_response).catch(console.error);
+            }, delay);
           },
 
+          // ── 本回答（最終アンサー）──
           (finalAnswer) => {
-            setTimeout(async () => {
+            // 1次回答を絶対に追い抜かないよう、本回答は最低1.5秒経過を保証
+            const elapsed = Date.now() - startTime;
+            const delay = Math.max(0, 1500 - elapsed);
+
+            setTimeout(() => {
               setMessages((prev) => prev.map((msg) => msg.id === api1MessageId ? { ...msg, isQuickResponse: false } : msg));
               setMessages((prev) => [...prev, { id: api2MessageId, sender: 'ai', text: finalAnswer, isQuickResponse: false }]);
               
-              if (isVoiceInput) await playVoiceWrapper(finalAnswer);
+              if (isVoiceInput) playVoiceWrapper(finalAnswer);
               
-              await dbService.saveMessage(api2MessageId, sessionId, 'ai', finalAnswer);
+              // 💡 こちらもawaitせず非同期化し、isLoadingを即座に解除
+              dbService.saveMessage(api2MessageId, sessionId, 'ai', finalAnswer).catch(console.error);
               setIsLoading(false);
-            }, 1200);
+            }, delay);
           },
 
-          async (extracted) => {
+          // ── 抽出情報の保存（EXTRACTOR）──
+          (extracted: any) => {
+            // 💡 m, f, d, i にそれぞれのオブジェクトの型を明示してエラーを解消
             if (extracted.memories) {
-              for (const m of extracted.memories) await dbService.saveMemory(m.content, m.category);
+              extracted.memories.forEach((m: { content: string, category: string }) => 
+                dbService.saveMemory(m.content, m.category).catch(console.error)
+              );
             }
             if (extracted.follow_ups) {
-              for (const f of extracted.follow_ups) await dbService.saveFollowUp(f.topic, f.context, f.is_resolved);
+              extracted.follow_ups.forEach((f: { topic: string, context: string, is_resolved: boolean }) => 
+                dbService.saveFollowUp(f.topic, f.context, f.is_resolved).catch(console.error)
+              );
             }
             if (extracted.user_dictionary) {
-              for (const d of extracted.user_dictionary) await dbService.saveDictionary(d.term, d.meaning);
+              extracted.user_dictionary.forEach((d: { term: string, meaning: string }) => 
+                dbService.saveDictionary(d.term, d.meaning).catch(console.error)
+              );
             }
-            // 💡 興味の保存
             if (extracted.interests) {
-              for (const i of extracted.interests) await dbService.saveInterest(i.topic);
+              extracted.interests.forEach((i: { topic: string }) => 
+                dbService.saveInterest(i.topic).catch(console.error)
+              );
             }
           }
         );
