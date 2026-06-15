@@ -86,7 +86,6 @@ export const aiService = {
     const finalAnswer = api3Response.text || '言葉にまとめられなかった。';
     onApi3Complete(finalAnswer);
 
-    // 💡 修正ポイント：抽出用のインプットに会話の流れ（全体文脈）をすべて流し込み、情報密度を高める
     try {
       const api4Response = await ai.models.generateContent({
         model,
@@ -94,6 +93,10 @@ export const aiService = {
         config: { systemInstruction: SYSTEM_PROMPTS.EXTRACTOR, responseMimeType: "application/json", responseSchema: memorySchema }
       });
       const api4Result = JSON.parse(api4Response.text || '{}');
+      
+      // 💡 デバッグ用：AIが何を抽出したか（あるいは空だったか）をコンソールに出力
+      console.log("🧠 記憶抽出AIの結果:", api4Result);
+
       if (api4Result.memories && api4Result.memories.length > 0) {
         onMemoryExtracted(api4Result.memories);
       }
