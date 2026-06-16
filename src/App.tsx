@@ -1,5 +1,5 @@
 // src/App.tsx
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useCompanionChat, VOICE_PRESETS } from './hooks/useCompanionChat';
 import { dbService } from './services/dbService';
 import { Companion3D } from './components/Companion3D'; // 💡 3Dコンポーネントをインポート

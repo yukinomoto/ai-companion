@@ -42,6 +42,11 @@ export const dbService = {
     if (error) console.error("挨拶プール保存失敗:", error);
   },
 
+  onDeleteGreeting: async (id: string): Promise<void> => { // ※ deleteGreetingから型定義に合わせて適宜変更があれば
+    const { error } = await supabase.from('greeting_pool').delete().eq('id', id);
+    if (error) console.error("挨拶削除失敗:", error);
+  },
+
   deleteGreeting: async (id: string): Promise<void> => {
     const { error } = await supabase.from('greeting_pool').delete().eq('id', id);
     if (error) console.error("挨拶削除失敗:", error);
@@ -49,32 +54,40 @@ export const dbService = {
 
   getMemories: async (): Promise<LongTermMemory[]> => {
     const { data, error } = await supabase.from('long_term_memories').select('*');
+    if (error) { console.error("記憶取得失敗:", error); return []; } // 💡 修正：errorを読み込む処理を追加
     return data || [];
   },
+  
   saveMemory: async (content: string, category: string, importance: number, memoryType: string, allowSmallTalk: boolean) => {
     await supabase.from('long_term_memories').insert([{ content, category, importance, memory_type: memoryType, allow_small_talk: allowSmallTalk }]);
   },
 
   getFollowUps: async (): Promise<FollowUp[]> => {
     const { data, error } = await supabase.from('follow_ups').select('*').eq('is_resolved', false);
+    if (error) { console.error("追跡タスク取得失敗:", error); return []; } // 💡 修正：errorを読み込む処理を追加
     return data || [];
   },
+  
   saveFollowUp: async (topic: string, context: string, isResolved: boolean, targetDate?: string) => {
     await supabase.from('follow_ups').insert([{ topic, context, is_resolved: isResolved, target_date: targetDate }]);
   },
 
   getDictionary: async (): Promise<UserDictionary[]> => {
     const { data, error } = await supabase.from('user_dictionary').select('*');
+    if (error) { console.error("辞書取得失敗:", error); return []; } // 💡 修正：errorを読み込む処理を追加
     return data || [];
   },
+  
   saveDictionary: async (term: string, meaning: string) => {
     await supabase.from('user_dictionary').insert([{ term, meaning }]);
   },
 
   getInterests: async (): Promise<Interest[]> => {
     const { data, error } = await supabase.from('interests').select('*');
+    if (error) { console.error("興味関心取得失敗:", error); return []; } // 💡 修正：errorを読み込む処理を追加
     return data || [];
   },
+  
   saveInterest: async (topic: string) => {
     await supabase.from('interests').insert([{ topic }]);
   }
