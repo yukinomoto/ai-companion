@@ -18,7 +18,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
   useEffect(() => { textRef.current = text; }, [text]);
   const onSendMessageRef = useRef(onSendMessage);
   useEffect(() => { onSendMessageRef.current = onSendMessage; }, [onSendMessage]);
-  
+
   const isManualStopRef = useRef(false);
   const wasVoiceInputRef = useRef(false);
 
@@ -50,14 +50,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
 
         recognition.onend = () => {
           setIsRecording(false);
-          if (isManualStopRef.current) {
-            if (textRef.current.trim()) {
-              onSendMessageRef.current(textRef.current, wasVoiceInputRef.current);
-              setText('');
-              wasVoiceInputRef.current = false;
-            }
-            isManualStopRef.current = false;
-          }
+          // 💡 ここにあった isManualStopRef による勝手な自動送信ロジックを完全削除
         };
         recognitionRef.current = recognition;
       }
@@ -73,13 +66,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
     if (!text.trim() || isLoading) return;
 
     if (isRecording && recognitionRef.current) {
-      isManualStopRef.current = true;
       recognitionRef.current.stop();
-    } else {
-      onSendMessage(text, wasVoiceInputRef.current);
-      setText('');
-      wasVoiceInputRef.current = false;
+      isManualStopRef.current = true; // 明示的な停止フラグ
     }
+    
+    // 💡 ユーザーが送信ボタンを押した時だけ送信処理を走らせる
+    onSendMessage(text, wasVoiceInputRef.current);
+    setText('');
+    wasVoiceInputRef.current = false;
   };
 
   const toggleRecording = () => {

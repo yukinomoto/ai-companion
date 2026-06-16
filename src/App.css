@@ -11,9 +11,11 @@
 html, body {
   margin: 0;
   padding: 0;
-  width: 100vw;
+  /* width: 100vw; を 100% に変更 */
+  width: 100%;
   height: 100dvh;
-  overflow: hidden; /* 横揺れの完全封殺 */
+  overflow: hidden;
+  /* 横揺れの完全封殺 */
   background: var(--bg-gradient);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   

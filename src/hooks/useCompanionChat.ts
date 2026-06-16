@@ -21,7 +21,7 @@ const getTimeContext = () => {
   else if (hour >= 11 && hour < 17) contextTag = 'afternoon';
   else if (hour >= 17 && hour < 23) contextTag = 'evening';
   else contextTag = 'night';
-
+  
   if (isFridayNight) contextTag = 'friday_night';
   else if (isWeekend && contextTag === 'morning') contextTag = 'weekend_morning';
   else if (isWeekend) contextTag = 'weekend';
@@ -82,7 +82,7 @@ export const useCompanionChat = (sessionId: string | null) => {
   const geminiKey = import.meta.env.VITE_GEMINI_API_KEY;
   const tavilyKey = import.meta.env.VITE_TAVILY_API_KEY;
   const gcloudApiKey = import.meta.env.VITE_GOOGLE_CLOUD_API_KEY;
-
+  
   const ai = new GoogleGenAI({ apiKey: geminiKey || '' });
 
   const refreshSessions = async () => {
@@ -96,21 +96,32 @@ export const useCompanionChat = (sessionId: string | null) => {
       const pool = await dbService.getGreetingPool();
       const { tag } = getTimeContext();
 
-      if (pool.length > 0) {
-        const matchedGreetings = pool.filter(p => p.context_type === tag);
-        const candidates = matchedGreetings.length > 0 ? matchedGreetings : pool;
-        const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+      const matchedGreetings = pool.filter(p => p.context_type === tag || p.context_type === 'neutral');
 
+      if (matchedGreetings.length > 0) {
+        const chosen = matchedGreetings[Math.floor(Math.random() * matchedGreetings.length)];
         setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: chosen.greeting_text, emotion: 'happy' }]);
         if (chosen.id) await dbService.deleteGreeting(chosen.id);
         setIsLoading(false);
         return;
       }
-      setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: "やあ！調子はどう？", emotion: 'neutral' }]);
+      
+      // 万が一マッチするものがなくても、時間帯を無視した挨拶を出さないよう安全策を設定
+      let defaultGreeting = "やあ！調子はどう？";
+      if (tag.includes('morning')) defaultGreeting = "おはよう！よく眠れた？";
+      else if (tag.includes('evening') || tag === 'night' || tag === 'friday_night') defaultGreeting = "こんばんは！今日もお疲れ様。";
+      else if (tag === 'afternoon') defaultGreeting = "こんにちは！調子はどう？";
+
+      setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: defaultGreeting, emotion: 'neutral' }]);
       generateGreetingPoolInBackground();
     } catch (error) {
       console.error("Greeting retrieval failed", error);
-      setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: "やあ！調子はどう？", emotion: 'neutral' }]);
+      let defaultGreeting = "やあ！調子はどう？";
+      const { tag } = getTimeContext();
+      if (tag.includes('morning')) defaultGreeting = "おはよう！よく眠れた？";
+      else if (tag.includes('evening') || tag === 'night' || tag === 'friday_night') defaultGreeting = "こんばんは！今日もお疲れ様。";
+      else if (tag === 'afternoon') defaultGreeting = "こんにちは！調子はどう？";
+      setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: defaultGreeting, emotion: 'neutral' }]);
     } finally {
       setIsLoading(false);
     }
@@ -121,7 +132,6 @@ export const useCompanionChat = (sessionId: string | null) => {
       const { tag } = getTimeContext();
       const validMemories = memoriesRef.current.filter(m => m.allow_small_talk).map(m => m.content).join('、') || 'なし';
       const interestStrings = interestsRef.current.map(i => `${i.topic}(関心度:${i.interest_level})`).join('、') || 'なし';
-
       const prompt = `あなたはユーザーの専属AIコンパニオンです。次回アプリ起動時に表示する「最初の話しかけ（1〜2文）」の候補を5個、JSON配列で出力してください。\n[データ]\n雑談可能な記憶: ${validMemories}\n関心事: ${interestStrings}\n時間コンテキスト: ${tag}\n出力は ["候補1", "候補2"...] のみ。`;
 
       const result = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
@@ -141,7 +151,12 @@ export const useCompanionChat = (sessionId: string | null) => {
   };
 
   useEffect(() => {
-    if (!sessionId) { refreshSessions(); return; }
+    if (!sessionId) { 
+      refreshSessions(); 
+      setMessages([]); // 画面をクリアにして新規の準備
+      generateDynamicGreeting(); 
+      return; 
+    }
     const loadHistory = async () => {
       const history = await dbService.getChatHistory(sessionId);
       if (history.length === 0) {
@@ -158,17 +173,20 @@ export const useCompanionChat = (sessionId: string | null) => {
     await audioService.play(text, selectedVoiceRef.current, gcloudApiKey);
   };
 
-  const sendMessage = async (userText: string, isVoiceInput: boolean) => {
-    if (!userText.trim() || isLoading || !sessionId) return;
+  const sendMessage = async (userText: string, isVoiceInput: boolean, overrideSessionId?: string) => {
+    const activeSessionId = overrideSessionId || sessionId;
+    if (!userText.trim() || isLoading || !activeSessionId) return;
+
     setIsLoading(true);
 
     const userMessageId = crypto.randomUUID();
     const api1MessageId = crypto.randomUUID();
     const api2MessageId = crypto.randomUUID();
-
+    
     setMessages((prev) => [...prev, { id: userMessageId, sender: 'user', text: userText }]);
+    
     let currentModel = 'gemini-3.1-flash-lite';
-
+    
     const executePipeline = async (): Promise<boolean> => {
       try {
         const chatContextText = messages.slice(-10).map(msg => `${msg.sender === 'user' ? 'User' : 'AI'}: ${msg.text}`).join('\n');
@@ -181,7 +199,7 @@ export const useCompanionChat = (sessionId: string | null) => {
         const interestStrings = interestsRef.current.map(i => `${i.topic} (関心度: ${i.interest_level})`);
 
         const startTime = Date.now();
-
+        
         await aiService.runPipeline(
           currentModel, ai, userText, chatContextText, tavilyKey || '', memoryStrings, followUpStrings, dictStrings, interestStrings,
 
@@ -193,14 +211,13 @@ export const useCompanionChat = (sessionId: string | null) => {
 
             setTimeout(() => {
               setMessages((prev) => prev.map((msg) => msg.id === userMessageId ? { ...msg, text: api1Result.user_display_text } : msg));
-              
               setMessages((prev) => [...prev, { id: api1MessageId, sender: 'ai', text: api1Result.quick_response, isQuickResponse: !isCompleted, emotion: quickEmotion }]);
+             
               if (isVoiceInput) playVoiceWrapper(api1Result.quick_response);
 
-              dbService.saveMessage(userMessageId, sessionId, 'user', api1Result.user_display_text).catch(console.error);
-              dbService.saveMessage(api1MessageId, sessionId, 'ai', api1Result.quick_response).catch(console.error);
+              dbService.saveMessage(userMessageId, activeSessionId, 'user', api1Result.user_display_text).catch(console.error);
+              dbService.saveMessage(api1MessageId, activeSessionId, 'ai', api1Result.quick_response).catch(console.error);
 
-              // 💡 完結時はここでローディングを解除。バックグラウンドでSTEP 3（記憶抽出）が走る
               if (isCompleted) {
                 setIsLoading(false);
                 generateGreetingPoolInBackground();
@@ -210,7 +227,6 @@ export const useCompanionChat = (sessionId: string | null) => {
 
           // ── STEP 3: 最終監査 ＆ 記憶抽出 ──
           (api3Result, isCompleted) => {
-            // STEP 1で完結しなかった場合のみ、新しい吹き出しとして本回答を表示
             if (!isCompleted) {
               const delay = Math.max(0, 1500 - (Date.now() - startTime));
               setTimeout(() => {
@@ -218,14 +234,14 @@ export const useCompanionChat = (sessionId: string | null) => {
                 setMessages((prev) => [...prev, { id: api2MessageId, sender: 'ai', text: api3Result.final_answer, isQuickResponse: false, emotion: api3Result.emotion || 'neutral' }]);
                 
                 if (isVoiceInput) playVoiceWrapper(api3Result.final_answer);
-                dbService.saveMessage(api2MessageId, sessionId, 'ai', api3Result.final_answer).catch(console.error);
+  
+                dbService.saveMessage(api2MessageId, activeSessionId, 'ai', api3Result.final_answer).catch(console.error);
                 
                 setIsLoading(false);
                 generateGreetingPoolInBackground();
               }, delay);
             }
 
-            // ── 抽出された記憶の保存処理（完結の有無に関わらず必ず実行） ──
             if (api3Result.memories) {
               api3Result.memories.forEach((m: any) => 
                 dbService.saveMemory(m.content, m.category, m.importance ?? 3, m.memory_type ?? 'fact', m.allow_small_talk ?? true).catch(console.error)
@@ -248,7 +264,6 @@ export const useCompanionChat = (sessionId: string | null) => {
             }
           }
         );
-
         return true;
       } catch (error) {
         if (currentModel === 'gemini-3.1-flash-lite') {
@@ -258,10 +273,10 @@ export const useCompanionChat = (sessionId: string | null) => {
         return false;
       }
     };
-
+    
     const success = await executePipeline();
     if (!success) setIsLoading(false);
   };
 
-  return { messages, isLoading, sendMessage, selectedVoice, setSelectedVoice, playVoice: playVoiceWrapper, isMuted, setIsMuted, sessions, unlockAudio };
+  return { messages, isLoading, sendMessage, selectedVoice, setSelectedVoice, playVoice: playVoiceWrapper, isMuted, setIsMuted, sessions, unlockAudio, refreshSessions };
 };
