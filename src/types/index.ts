@@ -8,6 +8,7 @@ export interface Message {
     sender: 'user' | 'ai';
     text: string;
     isQuickResponse?: boolean;
+    emotion?: 'neutral' | 'happy' | 'sad' | 'surprised' | 'thinking'; // 💡 追加
   }
   
   export interface ChatSession {
