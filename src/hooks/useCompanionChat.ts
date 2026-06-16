@@ -1,23 +1,40 @@
+// src/hooks/useCompanionChat.ts
 import { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import { audioService, VOICE_PRESETS } from '../services/audioService';
 import { dbService } from '../services/dbService';
 import { aiService } from '../services/aiService';
+import type { Message, ChatSession, LongTermMemory, FollowUp, UserDictionary, Interest } from '../types';
 
 export { VOICE_PRESETS };
+export type { Message, ChatSession };
 
-export interface Message {
-  id: string;
-  sender: 'user' | 'ai';
-  text: string;
-  isQuickResponse?: boolean;
-}
+// ========================================================
+// 💡 時間コンテキスト取得ヘルパー
+// 現在時刻から「朝」「夜」「金曜の夜」などの文脈タグを生成
+// ========================================================
+const getTimeContext = () => {
+  const now = new Date();
+  const hour = now.getHours();
+  const day = now.getDay();
+  const isWeekend = day === 0 || day === 6;
+  const isFridayNight = day === 5 && hour >= 18;
 
-export interface ChatSession {
-  session_id: string;
-  first_message: string;
-  created_at: string;
-}
+  let contextTag = 'daytime';
+  if (hour >= 5 && hour < 11) contextTag = 'morning';
+  else if (hour >= 11 && hour < 17) contextTag = 'afternoon';
+  else if (hour >= 17 && hour < 23) contextTag = 'evening';
+  else contextTag = 'night';
+
+  if (isFridayNight) contextTag = 'friday_night';
+  else if (isWeekend && contextTag === 'morning') contextTag = 'weekend_morning';
+  else if (isWeekend) contextTag = 'weekend';
+
+  return {
+    timestamp: now,
+    tag: contextTag,
+  };
+};
 
 export const useCompanionChat = (sessionId: string | null) => {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -31,11 +48,11 @@ export const useCompanionChat = (sessionId: string | null) => {
   const [isMuted, setIsMuted] = useState(false);
   const isMutedRef = useRef(isMuted);
 
-  // 💡 4つのキャッシュ
-  const [cachedMemories, setCachedMemories] = useState<{content: string, category: string}[]>([]);
-  const [cachedFollowUps, setCachedFollowUps] = useState<{topic: string, context: string, is_resolved: boolean, created_at?: string}[]>([]);
-  const [cachedDictionary, setCachedDictionary] = useState<{term: string, meaning: string}[]>([]);
-  const [cachedInterests, setCachedInterests] = useState<{topic: string, interest_level: number}[]>([]);
+  // 💡 4つのキャッシュ（外部の型定義を使用して型エラーを解消）
+  const [cachedMemories, setCachedMemories] = useState<LongTermMemory[]>([]);
+  const [cachedFollowUps, setCachedFollowUps] = useState<FollowUp[]>([]);
+  const [cachedDictionary, setCachedDictionary] = useState<UserDictionary[]>([]);
+  const [cachedInterests, setCachedInterests] = useState<Interest[]>([]);
   
   const memoriesRef = useRef(cachedMemories);
   const followUpsRef = useRef(cachedFollowUps);
@@ -73,6 +90,7 @@ export const useCompanionChat = (sessionId: string | null) => {
   const geminiKey = import.meta.env.VITE_GEMINI_API_KEY;
   const tavilyKey = import.meta.env.VITE_TAVILY_API_KEY;
   const gcloudApiKey = import.meta.env.VITE_GOOGLE_CLOUD_API_KEY;
+
   const ai = new GoogleGenAI({ apiKey: geminiKey || '' });
 
   const refreshSessions = async () => {
@@ -80,68 +98,82 @@ export const useCompanionChat = (sessionId: string | null) => {
     setSessions(list);
   };
 
+  // ========================================================
+  // 💡 スマートプール方式：挨拶の0秒出力（DB連携版）
+  // ========================================================
   const generateDynamicGreeting = async () => {
     setIsLoading(true);
     try {
-      const storedPool = localStorage.getItem('ai_greeting_pool');
-      let pool: string[] = storedPool ? JSON.parse(storedPool) : [];
+      // 1. LocalStorageではなく、DBからプールされている挨拶を取得
+      const pool = await dbService.getGreetingPool();
+      const { tag } = getTimeContext();
 
       if (pool.length > 0) {
-        const randomIndex = Math.floor(Math.random() * pool.length);
-        const chosenGreeting = pool[randomIndex];
-        pool.splice(randomIndex, 1);
-        localStorage.setItem('ai_greeting_pool', JSON.stringify(pool)); 
-        
-        setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: chosenGreeting }]);
+        // コンテキストタグが一致するものを優先的に探し、なければランダム
+        const matchedGreetings = pool.filter(p => p.context_type === tag);
+        const candidates = matchedGreetings.length > 0 ? matchedGreetings : pool;
+        const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+
+        setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: chosen.greeting_text }]);
+
+        // 使用した挨拶をプールから削除
+        if (chosen.id) await dbService.deleteGreeting(chosen.id);
         setIsLoading(false);
         return;
       }
 
-      const memoryStrings = memoriesRef.current.map(m => m.content).join('、') || 'なし';
-      const interestStrings = interestsRef.current.map(i => `${i.topic}(関心度:${i.interest_level})`).join('、') || 'なし';
-      
-      const prompt = `
-      あなたはユーザーの専属AIコンパニオンです。新しい会話セッションを開始します。
-      ユーザーが画面を開いた瞬間に表示する「最初の話しかけ（1〜2文程度）」の候補を10個作成し、JSONの配列形式で出力してください。
+      // 2. プールが空の場合は汎用的な挨拶を表示し、裏で生成をキックする
+      setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: "やあ！調子はどう？" }]);
+      generateGreetingPoolInBackground();
 
-      【重要な判断ルール（匙加減）】
-      以下のユーザーデータ（記憶と関心）の量と内容を分析し、10個の候補の内訳（過去の話題の続き、新しい関心事への提案、汎用的な挨拶）のバランスをあなた自身で判断して構成してください。
-      ・データが少ない場合は、汎用的な挨拶や調子を伺う内容を多めにしてください。
-      ・データが豊富な場合は、汎用的な挨拶は減らし、過去の文脈や関心事（直接話していなくても興味を持ちそうな事）に踏み込んだ話題を多めにしてください。
+    } catch (error) {
+      console.error("Greeting retrieval failed", error);
+      setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: "やあ！調子はどう？" }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 💡 会話終了後などにバックグラウンドで次回用の挨拶プールを生成しDBに保存
+  const generateGreetingPoolInBackground = async () => {
+    try {
+      const { tag } = getTimeContext();
+      
+      // 雑談許可フラグがtrueの記憶のみを抽出
+      const validMemories = memoriesRef.current.filter(m => m.allow_small_talk).map(m => m.content).join('、') || 'なし';
+      const interestStrings = interestsRef.current.map(i => `${i.topic}(関心度:${i.interest_level})`).join('、') || 'なし';
+
+      const prompt = `
+      あなたはユーザーの専属AIコンパニオンです。次回ユーザーがアプリを開いた瞬間に表示する「最初の話しかけ（1〜2文程度）」の候補を5個作成し、JSONの配列形式で出力してください。
 
       [ユーザーデータ]
-      ・記憶: ${memoryStrings}
+      ・雑談可能な記憶: ${validMemories}
       ・関心事: ${interestStrings}
+      ・現在想定される時間コンテキスト: ${tag} （この時間帯に合った挨拶や気遣いを含めること）
 
       出力は必ず以下のJSON配列のみとしてください。
-      ["候補1", "候補2", "候補3", "候補4", "候補5", "候補6", "候補7", "候補8", "候補9", "候補10"]
+      ["候補1", "候補2", "候補3", "候補4", "候補5"]
       `;
 
       const result = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: prompt
       });
-      
+
       const text = result.text || '';
       const jsonMatch = text.match(/\[.*\]/s);
-      
+
       if (jsonMatch) {
         const candidates = JSON.parse(jsonMatch[0]);
-        if (Array.isArray(candidates) && candidates.length > 0) {
-          const randomIndex = Math.floor(Math.random() * candidates.length);
-          const chosenGreeting = candidates[randomIndex];
-          
-          candidates.splice(randomIndex, 1);
-          localStorage.setItem('ai_greeting_pool', JSON.stringify(candidates));
-
-          setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: chosenGreeting }]);
+        if (Array.isArray(candidates)) {
+          for (const greetingText of candidates) {
+            // 生成した候補をDBのgreeting_poolに保存
+            await dbService.saveGreetingPool(greetingText, tag);
+          }
         }
       }
     } catch (error) {
-      console.error("Greeting generation failed", error);
-      setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: "やあ！調子はどう？" }]);
-    } finally {
-      setIsLoading(false);
+      console.error("Background pool generation failed", error);
     }
   };
 
@@ -179,15 +211,16 @@ export const useCompanionChat = (sessionId: string | null) => {
       try {
         const chatContextText = messages.slice(-10).map(msg => `${msg.sender === 'user' ? 'User' : 'AI'}: ${msg.text}`).join('\n');
 
-        const memoryStrings = memoriesRef.current.map(m => m.content);
+        // 💡 記憶のコンテキストに重要度を反映。雑談不可のものはあえて除外することも可能
+        const memoryStrings = memoriesRef.current.map(m => `[重要度${m.importance}] ${m.content}`);
         const followUpStrings = followUpsRef.current.map(f => {
-          const dateStr = f.created_at ? new Date(f.created_at).toLocaleDateString('ja-JP') : '過去';
-          return `[登録日: ${dateStr}] ${f.topic} - ${f.context}`;
+          const targetStr = f.target_date ? ` (対象日: ${f.target_date})` : '';
+          return `${f.topic}${targetStr} - ${f.context}`;
         });
+
         const dictStrings = dictRef.current.map(d => `${d.term}: ${d.meaning}`);
         const interestStrings = interestsRef.current.map(i => `${i.topic} (関心度: ${i.interest_level})`);
 
-        // 💡 パイプライン開始時刻を記録
         const startTime = Date.now();
 
         await aiService.runPipeline(
@@ -203,7 +236,6 @@ export const useCompanionChat = (sessionId: string | null) => {
 
           // ── 1次回答（クイック・レスポンス）──
           async (api1Result) => {
-            // かかった時間を計測し、足りない分だけ待機（最大1秒）
             const elapsed = Date.now() - startTime;
             const delay = Math.max(0, 1000 - elapsed);
 
@@ -213,7 +245,6 @@ export const useCompanionChat = (sessionId: string | null) => {
 
               if (isVoiceInput) playVoiceWrapper(api1Result.quick_response);
 
-              // 💡 UI描画をブロックさせないため、awaitせず裏側に投げる
               dbService.saveMessage(userMessageId, sessionId, 'user', api1Result.user_display_text).catch(console.error);
               dbService.saveMessage(api1MessageId, sessionId, 'ai', api1Result.quick_response).catch(console.error);
             }, delay);
@@ -221,7 +252,6 @@ export const useCompanionChat = (sessionId: string | null) => {
 
           // ── 本回答（最終アンサー）──
           (finalAnswer) => {
-            // 1次回答を絶対に追い抜かないよう、本回答は最低1.5秒経過を保証
             const elapsed = Date.now() - startTime;
             const delay = Math.max(0, 1500 - elapsed);
 
@@ -231,23 +261,35 @@ export const useCompanionChat = (sessionId: string | null) => {
               
               if (isVoiceInput) playVoiceWrapper(finalAnswer);
               
-              // 💡 こちらもawaitせず非同期化し、isLoadingを即座に解除
               dbService.saveMessage(api2MessageId, sessionId, 'ai', finalAnswer).catch(console.error);
               setIsLoading(false);
+
+              // 💡 会話終了後にバックグラウンドで挨拶プールを補充する
+              generateGreetingPoolInBackground();
             }, delay);
           },
 
           // ── 抽出情報の保存（EXTRACTOR）──
           (extracted: any) => {
-            // 💡 m, f, d, i にそれぞれのオブジェクトの型を明示してエラーを解消
             if (extracted.memories) {
-              extracted.memories.forEach((m: { content: string, category: string }) => 
-                dbService.saveMemory(m.content, m.category).catch(console.error)
+              extracted.memories.forEach((m: { content: string, category: string, importance?: number, memory_type?: string, allow_small_talk?: boolean }) => 
+                dbService.saveMemory(
+                  m.content, 
+                  m.category, 
+                  m.importance ?? 3, 
+                  m.memory_type ?? 'fact', 
+                  m.allow_small_talk ?? true
+                ).catch(console.error)
               );
             }
             if (extracted.follow_ups) {
-              extracted.follow_ups.forEach((f: { topic: string, context: string, is_resolved: boolean }) => 
-                dbService.saveFollowUp(f.topic, f.context, f.is_resolved).catch(console.error)
+              extracted.follow_ups.forEach((f: { topic: string, context: string, is_resolved: boolean, target_date?: string }) => 
+                dbService.saveFollowUp(
+                  f.topic, 
+                  f.context, 
+                  f.is_resolved,
+                  f.target_date
+                ).catch(console.error)
               );
             }
             if (extracted.user_dictionary) {
@@ -266,7 +308,7 @@ export const useCompanionChat = (sessionId: string | null) => {
         return true;
       } catch (error) {
         if (currentModel === 'gemini-3.1-flash-lite') {
-          currentModel = 'gemini-2.5-flash-lite'; 
+          currentModel = 'gemini-2.5-flash-lite';
           return await executePipeline();
         }
         return false;

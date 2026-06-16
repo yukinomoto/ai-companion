@@ -10,22 +10,13 @@ function App() {
   
   const { messages, isLoading, sendMessage, isMuted, setIsMuted, unlockAudio, sessions, playVoice } = useCompanionChat(currentSessionId);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const lastMessageCountRef = useRef(0);
 
   // AI回答時の音声自動再生と、チャットスクロールの連動
   useEffect(() => {
-    if (messages.length > lastMessageCountRef.current) {
-      const latestMsg = messages[messages.length - 1];
-      if (latestMsg && latestMsg.sender === 'ai' && !latestMsg.isQuickResponse) {
-        playVoice(latestMsg.text);
-      }
-    }
-    lastMessageCountRef.current = messages.length;
-    
     if (chatEndRef.current) {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages, playVoice, isChatMode]);
+  }, [messages, isChatMode]);
 
   useEffect(() => {
     if (!currentSessionId && messages.length === 0) {

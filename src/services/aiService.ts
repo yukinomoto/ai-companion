@@ -13,11 +13,35 @@ const api1Schema: Schema = {
 };
 
 // 💡 interests を追加した最強のスキーマ
+// 💡 拡張されたDBスキーマに対応した抽出スキーマ
 const memorySchema: Schema = {
   type: Type.OBJECT,
   properties: {
-    memories: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { content: { type: Type.STRING }, category: { type: Type.STRING } } } },
-    follow_ups: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { topic: { type: Type.STRING }, context: { type: Type.STRING }, is_resolved: { type: Type.BOOLEAN } } } },
+    memories: { 
+      type: Type.ARRAY, 
+      items: { 
+        type: Type.OBJECT, 
+        properties: { 
+          content: { type: Type.STRING }, 
+          category: { type: Type.STRING },
+          importance: { type: Type.INTEGER }, // 追加
+          memory_type: { type: Type.STRING }, // 追加
+          allow_small_talk: { type: Type.BOOLEAN } // 追加
+        } 
+      } 
+    },
+    follow_ups: { 
+      type: Type.ARRAY, 
+      items: { 
+        type: Type.OBJECT, 
+        properties: { 
+          topic: { type: Type.STRING }, 
+          context: { type: Type.STRING }, 
+          is_resolved: { type: Type.BOOLEAN },
+          target_date: { type: Type.STRING } // 追加
+        } 
+      } 
+    },
     user_dictionary: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { term: { type: Type.STRING }, meaning: { type: Type.STRING } } } },
     interests: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { topic: { type: Type.STRING } } } }
   }
