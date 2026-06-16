@@ -12,13 +12,14 @@ function App() {
   const { messages, isLoading, sendMessage, isMuted, setIsMuted, unlockAudio, sessions, playVoice } = useCompanionChat(currentSessionId);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // 💡 チャットスクロールの連動のみ（音声はHook層で制御）
+  // 💡 チャットスクロールの連動のみ（音声はHook層のパイプライン内で制御するため二重発火しない）
   useEffect(() => {
     if (chatEndRef.current) {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [messages, isChatMode]);
 
+  // セッションIDの初期化
   useEffect(() => {
     if (!currentSessionId && messages.length === 0) {
       setCurrentSessionId(crypto.randomUUID());
@@ -35,10 +36,14 @@ function App() {
     setShowHistorySessions(false);
   };
 
+  // 💡 最新のAIのメッセージから感情を抽出（Companion3Dへ渡すため）
+  const latestAiMessage = messages.slice().reverse().find(m => m.sender === 'ai');
+  const currentEmotion = latestAiMessage?.emotion || 'neutral';
+
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto', height: '100dvh', display: 'flex', flexDirection: 'column', background: 'linear-gradient(180deg, #ffffff 0%, #f0f9ff 35%, #faf5ff 70%, #e0f2fe 100%)', position: 'relative', overflow: 'hidden', boxSizing: 'border-box' }}>
       
-      {/* 🌟 1. 固定システムヘッダー (最前面) */}
+      {/* 🌟 1. 固定システムヘッダー (最前面レイヤー) */}
       <header style={{ height: '80px', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 200, position: 'relative', boxSizing: 'border-box' }}>
         <button 
           onClick={() => setShowHistorySessions(true)}
@@ -64,11 +69,11 @@ function App() {
         
         {/* 【レイヤー1: 背面】常に表示される3Dキャラクター */}
         <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {/* isChatMode時はキャラを少し上にオフセットするかは今後の調整次第 */}
-          <Companion3D isLoading={isLoading} />
+          {/* 💡 AIから抽出した最新の感情（emotion）を渡す */}
+          <Companion3D isLoading={isLoading} emotion={currentEmotion as any} />
         </div>
 
-        {/* 【レイヤー2: 前面】パターンA: ホーム画面（最新の吹き出しのみ） */}
+        {/* 【レイヤー2: 前面】パターンA: ホーム画面（最新の吹き出しのみ表示） */}
         {!isChatMode && messages.length > 0 && String(messages[messages.length - 1]?.sender).trim().toLowerCase() === 'ai' && (
           <div style={{ position: 'absolute', bottom: '20px', left: '0', right: '0', zIndex: 20, display: 'flex', justifyContent: 'center', padding: '0 24px', boxSizing: 'border-box' }}>
             <div 
@@ -143,7 +148,7 @@ function App() {
         </div>
       )}
 
-      {/* 🌟 4. 下部固定入力バー (最前面) */}
+      {/* 🌟 4. 下部固定入力バー (最前面レイヤー) */}
       <footer style={{ padding: '16px 24px 30px 24px', boxSizing: 'border-box', zIndex: 200, position: 'relative' }}>
         <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} isMuted={isMuted} setIsMuted={setIsMuted} unlockAudio={unlockAudio} />
       </footer>
