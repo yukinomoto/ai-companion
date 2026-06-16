@@ -2,52 +2,37 @@
 import { GoogleGenAI, Type, type Schema } from '@google/genai';
 import { SYSTEM_PROMPTS } from '../prompts';
 
-// 💡 1次回答スキーマ（emotionに加え、is_completedを追加）
 const api1Schema: Schema = {
   type: Type.OBJECT,
   properties: {
-    quick_response: { type: Type.STRING },
-    emotion: { type: Type.STRING },
+    thought_process: { type: Type.STRING },
     is_completed: { type: Type.BOOLEAN },
+    emotion: { type: Type.STRING },
     user_display_text: { type: Type.STRING },
     corrected_query: { type: Type.STRING },
-    requires_search: { type: Type.BOOLEAN }
+    requires_search: { type: Type.BOOLEAN },
+    quick_response: { type: Type.STRING }
   },
-  required: ["quick_response", "emotion", "is_completed", "user_display_text", "corrected_query", "requires_search"],
+  required: ["thought_process", "is_completed", "emotion", "user_display_text", "corrected_query", "requires_search", "quick_response"],
 };
 
-// 💡 記憶抽出スキーマ
-const memorySchema: Schema = {
+const api3Schema: Schema = {
   type: Type.OBJECT,
   properties: {
+    final_answer: { type: Type.STRING },
+    emotion: { type: Type.STRING },
     memories: { 
       type: Type.ARRAY, 
-      items: { 
-        type: Type.OBJECT, 
-        properties: { 
-          content: { type: Type.STRING }, 
-          category: { type: Type.STRING },
-          importance: { type: Type.INTEGER },
-          memory_type: { type: Type.STRING },
-          allow_small_talk: { type: Type.BOOLEAN }
-        } 
-      } 
+      items: { type: Type.OBJECT, properties: { content: { type: Type.STRING }, category: { type: Type.STRING }, importance: { type: Type.INTEGER }, memory_type: { type: Type.STRING }, allow_small_talk: { type: Type.BOOLEAN } } } 
     },
     follow_ups: { 
       type: Type.ARRAY, 
-      items: { 
-        type: Type.OBJECT, 
-        properties: { 
-          topic: { type: Type.STRING }, 
-          context: { type: Type.STRING }, 
-          is_resolved: { type: Type.BOOLEAN },
-          target_date: { type: Type.STRING }
-        } 
-      } 
+      items: { type: Type.OBJECT, properties: { topic: { type: Type.STRING }, context: { type: Type.STRING }, is_resolved: { type: Type.BOOLEAN }, target_date: { type: Type.STRING } } } 
     },
     user_dictionary: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { term: { type: Type.STRING }, meaning: { type: Type.STRING } } } },
     interests: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { topic: { type: Type.STRING } } } }
-  }
+  },
+  required: ["final_answer", "emotion"]
 };
 
 export const aiService = {
@@ -61,9 +46,7 @@ export const aiService = {
       });
       const data = await response.json();
       return data.results.map((r: any) => `[情報源: ${r.title}] ${r.content}`).join('\n\n');
-    } catch (err) { 
-      return "（検索失敗）";
-    }
+    } catch (err) { return "（検索失敗）"; }
   },
 
   runPipeline: async (
@@ -77,10 +60,8 @@ export const aiService = {
     dictionary: string[],
     interests: string[],
     onApi1Complete: (result: { quick_response: string; emotion?: string; is_completed: boolean; user_display_text: string; requires_search: boolean; corrected_query: string }) => void,
-    onApi3Complete: (finalAnswer: string) => void,
-    onMemoryExtracted: (extracted: any) => void
+    onFinalComplete: (result: any, isCompleted: boolean) => void
   ) => {
-    
     const now = new Date();
     const days = ['日', '月', '火', '水', '木', '金', '土'];
     const currentDateStr = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日(${days[now.getDay()]}) ${now.getHours()}時${now.getMinutes()}分`;
@@ -90,65 +71,46 @@ export const aiService = {
     const dictContext = dictionary.length > 0 ? dictionary.map(d => `- ${d}`).join('\n') : 'なし';
     const interestsContext = interests.length > 0 ? interests.map(i => `- ${i}`).join('\n') : 'なし';
 
-    // ── API 1: クイックレスポンス生成 ──
+    // ── STEP 1: フロント対応 (RECEIVER) ──
     const api1Response = await ai.models.generateContent({
       model,
       contents: `【現在日時】\n${currentDateStr}\n\n【ユーザーに関する長期記憶】\n${memoriesContext}\n【未解決の話題】\n${followUpsContext}\n【ユーザー辞書】\n${dictContext}\n【ユーザーの興味・関心】\n${interestsContext}\n\n【会話履歴】\n${chatContextText}\n\n【入力】\n"${userText}"`,
       config: { systemInstruction: SYSTEM_PROMPTS.RECEIVER, responseMimeType: "application/json", responseSchema: api1Schema }
     });
     const api1Result = JSON.parse(api1Response.text || '{}');
+    console.log("🤔 思考プロセス:", api1Result.thought_process);
+    
     onApi1Complete(api1Result);
 
-    // 💡 即答で完結（is_completed: true）する場合は、本回答の生成をスキップして早期リターン
-    if (api1Result.is_completed) {
-      try {
-        const api4Response = await ai.models.generateContent({
-          model,
-          contents: `【現在日時】\n${currentDateStr}\n\n【これまでの会話文脈】\n${chatContextText}\n\n【今回のユーザーの実際の発言】\n"${userText}"\n\n【今回のAIの最終回答】\n"${api1Result.quick_response}"`,
-          config: { systemInstruction: SYSTEM_PROMPTS.EXTRACTOR, responseMimeType: "application/json", responseSchema: memorySchema }
-        });
-        const api4Result = JSON.parse(api4Response.text || '{}');
-        onMemoryExtracted(api4Result);
-      } catch (e) {
-        console.error("即答パターン時の記憶抽出に失敗:", e);
+    // ── STEP 2: 本回答の原稿作成 (THINKER) ※未完結時のみ ──
+    let draftText = api1Result.quick_response;
+    if (!api1Result.is_completed) {
+      let webContext = "（未実行）";
+      if (api1Result.requires_search) {
+        webContext = await aiService.searchWeb(api1Result.corrected_query, tavilyKey);
       }
-      return; 
-    }
-
-    // ── 外部検索（本回答が必要な場合のみ） ──
-    let webContext = "（未実行）";
-    if (api1Result.requires_search) {
-      webContext = await aiService.searchWeb(api1Result.corrected_query, tavilyKey);
-    }
-
-    // ── API 2: 本回答の原稿作成 ──
-    const api2Response = await ai.models.generateContent({
-      model,
-      contents: `【現在日時】\n${currentDateStr}\n\n【ユーザーに関する長期記憶】\n${memoriesContext}\n【未解決の話題】\n${followUpsContext}\n【ユーザー辞書】\n${dictContext}\n【ユーザーの興味・関心】\n${interestsContext}\n\n【会話文脈】\n${chatContextText}\n【検索結果】\n${webContext}\n\n【あなたが直前に返した相槌】\n"${api1Result.quick_response}"\n\n【ユーザーの入力】\n"${api1Result.corrected_query}"`,
-      config: { systemInstruction: SYSTEM_PROMPTS.THINKER }
-    });
-
-    // ── API 3: 編集・最終出力 ──
-    const api3Response = await ai.models.generateContent({
-      model,
-      contents: `【ドラフト】\n"${api2Response.text}"\n--- 前提データ ---\n【直前の相槌】\n"${api1Result.quick_response}"`,
-      config: { systemInstruction: SYSTEM_PROMPTS.EDITOR }
-    });
-    const finalAnswer = api3Response.text || '[neutral]言葉にまとめられなかった。';
-    onApi3Complete(finalAnswer);
-
-    // ── API 4: 記憶抽出 ──
-    try {
-      const api4Response = await ai.models.generateContent({
+      const api2Response = await ai.models.generateContent({
         model,
-        contents: `【現在日時】\n${currentDateStr}\n\n【これまでの会話文脈】\n${chatContextText}\n\n【今回のユーザーの実際の発言】\n"${userText}"\n\n【今回のAIの最終回答】\n"${finalAnswer}"`,
-        config: { systemInstruction: SYSTEM_PROMPTS.EXTRACTOR, responseMimeType: "application/json", responseSchema: memorySchema }
+        contents: `【現在日時】\n${currentDateStr}\n\n【ユーザーに関する長期記憶】\n${memoriesContext}\n【未解決の話題】\n${followUpsContext}\n【ユーザー辞書】\n${dictContext}\n【ユーザーの興味・関心】\n${interestsContext}\n\n【会話文脈】\n${chatContextText}\n【検索結果】\n${webContext}\n\n【直前の相槌】\n"${api1Result.quick_response}"\n\n【ユーザーの入力】\n"${api1Result.corrected_query}"`,
+        config: { systemInstruction: SYSTEM_PROMPTS.THINKER }
       });
-      const api4Result = JSON.parse(api4Response.text || '{}');
-      console.log("🧠 記憶抽出AIの結果:", api4Result);
-      onMemoryExtracted(api4Result);
+      draftText = api2Response.text || '';
+    }
+
+    // ── STEP 3: 最終監査 ＆ 記憶抽出 (EDITOR_AND_EXTRACTOR) ※必ず実行 ──
+    try {
+      const api3Response = await ai.models.generateContent({
+        model,
+        // 💡 記憶の重複を防ぐため、ここで【現在の長期記憶】をカンペとして渡す
+        contents: `【現在日時】\n${currentDateStr}\n\n【現在の長期記憶】\n${memoriesContext}\n\n【これまでの会話文脈】\n${chatContextText}\n\n【ユーザーの発言】\n"${userText}"\n\n【直前の相槌】\n"${api1Result.quick_response}"\n\n【監査対象の回答原稿】\n"${draftText}"`,
+        config: { systemInstruction: SYSTEM_PROMPTS.EDITOR_AND_EXTRACTOR, responseMimeType: "application/json", responseSchema: api3Schema }
+      });
+      const api3Result = JSON.parse(api3Response.text || '{}');
+      console.log("🧠 監査＆記憶抽出:", api3Result);
+      
+      onFinalComplete(api3Result, api1Result.is_completed);
     } catch (e) {
-      console.error("記憶の抽出に失敗しました:", e);
+      console.error("監査・抽出パイプラインでエラーが発生:", e);
     }
   }
 };

@@ -1,160 +1,251 @@
 // src/App.tsx
-import { useState, useEffect, useRef } from 'react';
-import { useCompanionChat } from './hooks/useCompanionChat';
-import { ChatInput } from './components/ChatInput';
-import { Companion3D } from './components/Companion3D';
+import React, { useState, useEffect, useRef } from 'react';
+import { useCompanionChat, VOICE_PRESETS } from './hooks/useCompanionChat';
+import { dbService } from './services/dbService';
+import { Companion3D } from './components/Companion3D'; // 💡 3Dコンポーネントをインポート
+import { 
+  Menu, 
+  MessageSquare, 
+  Plus, 
+  Image as ImageIcon, 
+  Volume2, 
+  VolumeX, 
+  History,
+  Mic,
+  Send
+} from 'lucide-react';
 
-function App() {
+export default function App() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [textInput, setTextInput] = useState('');
   const [isChatMode, setIsChatMode] = useState(false);
-  const [showHistorySessions, setShowHistorySessions] = useState(false); 
   
-  const { messages, isLoading, sendMessage, isMuted, setIsMuted, unlockAudio, sessions, playVoice } = useCompanionChat(currentSessionId);
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  const { 
+    messages, 
+    isLoading, 
+    sendMessage, 
+    selectedVoice, 
+    setSelectedVoice, 
+    isMuted, 
+    setIsMuted, 
+    sessions,
+    unlockAudio 
+  } = useCompanionChat(currentSessionId);
 
-  // 💡 チャットスクロールの連動のみ（音声はHook層のパイプライン内で制御するため二重発火しない）
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    if (chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages, isChatMode]);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
-  // セッションIDの初期化
   useEffect(() => {
-    if (!currentSessionId && messages.length === 0) {
-      setCurrentSessionId(crypto.randomUUID());
-    }
-  }, [currentSessionId, messages.length]);
+    const initSession = async () => {
+      const list = await dbService.getSessions();
+      if (list.length > 0) {
+        setCurrentSessionId(list[0].id);
+      } else {
+        handleNewSession();
+      }
+    };
+    initSession();
+  }, []);
 
-  const handleSendMessage = (text: string, isVoice: boolean) => {
-    if (!currentSessionId) setCurrentSessionId(crypto.randomUUID());
-    sendMessage(text, isVoice);
+  const handleNewSession = async () => {
+    const name = `会話 ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    const newSession = await dbService.createSession(name);
+    setCurrentSessionId(newSession.id);
+    setIsSidebarOpen(false);
   };
 
-  const selectSession = (sessionId: string) => {
-    setCurrentSessionId(sessionId);
-    setShowHistorySessions(false);
+  const handleSendText = () => {
+    if (!textInput.trim()) return;
+    unlockAudio();
+    sendMessage(textInput, false);
+    setTextInput('');
   };
 
-  // 💡 最新のAIのメッセージから感情を抽出（Companion3Dへ渡すため）
-  const latestAiMessage = messages.slice().reverse().find(m => m.sender === 'ai');
-  const currentEmotion = latestAiMessage?.emotion || 'neutral';
+  const latestAiMessage = [...messages].reverse().find(m => m.sender === 'ai');
+  
+  // Companion3Dの型に合わせるための感情マッピング
+  const currentEmotion = (latestAiMessage?.emotion || 'neutral') as 'neutral' | 'happy' | 'sad' | 'surprised' | 'thinking';
 
   return (
-    <div style={{ maxWidth: '600px', margin: '0 auto', height: '100dvh', display: 'flex', flexDirection: 'column', background: 'linear-gradient(180deg, #ffffff 0%, #f0f9ff 35%, #faf5ff 70%, #e0f2fe 100%)', position: 'relative', overflow: 'hidden', boxSizing: 'border-box' }}>
+    <div className="fixed inset-0 flex bg-gradient-to-b from-sky-50 via-white to-purple-50 text-slate-800 font-sans antialiased overflow-hidden select-none">
       
-      {/* 🌟 1. 固定システムヘッダー (最前面レイヤー) */}
-      <header style={{ height: '80px', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 200, position: 'relative', boxSizing: 'border-box' }}>
-        <button 
-          onClick={() => setShowHistorySessions(true)}
-          style={{ background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.5)', width: '48px', height: '48px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 16px rgba(0,0,0,0.04)' }}
-        >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
-        </button>
-
-        <button 
-          onClick={() => setIsChatMode(!isChatMode)} 
-          style={{ background: isChatMode ? 'rgba(59,130,246,0.15)' : 'rgba(255,255,255,0.7)', backdropFilter: 'blur(10px)', border: isChatMode ? '1px solid rgba(59,130,246,0.3)' : '1px solid rgba(255,255,255,0.5)', width: '48px', height: '48px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 16px rgba(0,0,0,0.04)' }}
-        >
-          {isChatMode ? (
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-          ) : (
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-          )}
-        </button>
-      </header>
-
-      {/* 🌟 2. メインコンテンツ領域（Z-Indexで階層化） */}
-      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        
-        {/* 【レイヤー1: 背面】常に表示される3Dキャラクター */}
-        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {/* 💡 AIから抽出した最新の感情（emotion）を渡す */}
-          <Companion3D isLoading={isLoading} emotion={currentEmotion as any} />
-        </div>
-
-        {/* 【レイヤー2: 前面】パターンA: ホーム画面（最新の吹き出しのみ表示） */}
-        {!isChatMode && messages.length > 0 && String(messages[messages.length - 1]?.sender).trim().toLowerCase() === 'ai' && (
-          <div style={{ position: 'absolute', bottom: '20px', left: '0', right: '0', zIndex: 20, display: 'flex', justifyContent: 'center', padding: '0 24px', boxSizing: 'border-box' }}>
-            <div 
-              className="animate-popup"
-              style={{ position: 'relative', background: 'rgba(255, 255, 255, 0.85)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', borderRadius: '24px', padding: '20px 24px', boxShadow: '0 10px 32px rgba(15,23,42,0.08)', border: '1px solid rgba(255,255,255,0.6)', textAlign: 'center', width: '100%', maxWidth: '320px', cursor: 'pointer' }}
-              onClick={() => setIsChatMode(true)}
-            >
-              <p style={{ margin: 0, fontSize: '15px', color: '#1e293b', fontWeight: 500, lineHeight: '1.6', whiteSpace: 'pre-wrap' }}>
-                {messages[messages.length - 1].text}
-              </p>
-              {messages[messages.length - 1].isQuickResponse && (
-                <p style={{ margin: '6px 0 0 0', fontSize: '11px', color: '#64748b' }}>思考中...</p>
-              )}
-              {/* 吹き出しのしっぽ */}
-              <div style={{ position: 'absolute', bottom: '-10px', left: '50%', transform: 'translateX(-50%)', width: 0, height: 0, borderLeft: '12px solid transparent', borderRight: '12px solid transparent', borderTop: '10px solid rgba(255, 255, 255, 0.85)', filter: 'drop-shadow(0 4px 2px rgba(0,0,0,0.03))' }} />
+      {/* ── 左側：履歴ドロワー ── */}
+      {isSidebarOpen && (
+        <div className="fixed inset-0 z-50 flex">
+          <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)} />
+          <div className="relative w-72 bg-white/90 backdrop-blur-md h-full shadow-2xl p-6 flex flex-col z-10 animate-in slide-in-from-left duration-200">
+            <h2 className="text-lg font-bold flex items-center gap-2 mb-6 text-slate-700">
+              <History size={20} /> 過去の会話一覧
+            </h2>
+            <div className="flex-1 overflow-y-auto space-y-2 mb-4 pr-1">
+              {sessions.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => { setCurrentSessionId(s.id); setIsSidebarOpen(false); }}
+                  className={`w-full text-left p-3.5 rounded-2xl transition-all duration-150 flex items-center gap-3 ${
+                    s.id === currentSessionId 
+                      ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/20 font-medium' 
+                      : 'hover:bg-slate-100/80 text-slate-600'
+                  }`}
+                >
+                  <MessageSquare size={18} className="shrink-0" />
+                  <span className="truncate text-sm">{s.name}</span>
+                </button>
+              ))}
             </div>
-          </div>
-        )}
-
-        {/* 【レイヤー3: 前面】パターンB: テキストチャット画面（すりガラスオーバーレイ） */}
-        {isChatMode && (
-          <div className="hide-scrollbar" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 30, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '16px', background: 'rgba(255, 255, 255, 0.3)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' }}>
-            {messages.map(msg => {
-              const isAi = String(msg.sender).trim().toLowerCase() === 'ai';
-              return (
-                <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isAi ? 'flex-start' : 'flex-end', maxWidth: '85%', alignSelf: isAi ? 'flex-start' : 'flex-end' }}>
-                  
-                  <div style={{ 
-                    background: isAi ? 'rgba(255, 255, 255, 0.9)' : '#1e293b', 
-                    color: isAi ? '#1e293b' : '#ffffff',
-                    padding: isAi ? '16px 20px' : '12px 18px',
-                    borderRadius: isAi ? '24px 24px 24px 4px' : '24px 24px 4px 24px',
-                    boxShadow: '0 4px 16px rgba(15,23,42,0.06)',
-                    border: isAi ? '1px solid rgba(255, 255, 255, 0.8)' : 'none',
-                    fontSize: '14px', lineHeight: '1.6', fontWeight: 500
-                  }}>
-                    <span className="selectable-text" style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</span>
-                    
-                    {isAi && !msg.isQuickResponse && (
-                      <button 
-                        onClick={() => playVoice(msg.text)}
-                        style={{ display: 'flex', alignItems: 'center', gap: '4px', border: '1px solid rgba(187, 247, 208, 0.5)', background: 'rgba(240, 253, 244, 0.8)', color: '#16a34a', fontSize: '11px', padding: '4px 8px', borderRadius: '8px', marginTop: '8px', cursor: 'pointer', fontWeight: 600 }}
-                      >
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
-                        声を聴く
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-            <div ref={chatEndRef} style={{ height: '20px' }} />
-          </div>
-        )}
-      </div>
-
-      {/* 🌟 3. 活動ログ履歴 (最前面フルスクリーン) */}
-      {showHistorySessions && (
-        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(255,255,255,0.98)', backdropFilter: 'blur(15px)', zIndex: 300, display: 'flex', flexDirection: 'column' }}>
-          <header style={{ padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #f1f5f9' }}>
-            <h2 style={{ margin: 0, fontSize: '17px', color: '#1e293b', fontWeight: 600 }}>会話の履歴</h2>
-            <button onClick={() => setShowHistorySessions(false)} style={{ background: '#f1f5f9', border: 'none', width: '36px', height: '36px', borderRadius: '50%', fontSize: '16px', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
-          </header>
-          <div className="hide-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
-            {sessions.map(session => (
-              <button key={session.session_id} onClick={() => selectSession(session.session_id)} style={{ textAlign: 'left', padding: '16px', borderRadius: '16px', background: '#f8fafc', border: '1px solid #e2e8f0', cursor: 'pointer', width: '100%', marginBottom: '12px' }}>
-                <div style={{ fontSize: '11px', color: '#64748b', marginBottom: '4px' }}>{new Date(session.created_at).toLocaleDateString('ja-JP')}</div>
-                <div style={{ fontSize: '14px', color: '#1e293b', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.first_message || "新しい会話"}</div>
-              </button>
-            ))}
+            
+            <div className="border-t border-slate-100 pt-4 space-y-3">
+              <label className="text-xs font-semibold text-slate-400 tracking-wider block">声のプリセット</label>
+              <select 
+                value={selectedVoice} 
+                onChange={(e) => setSelectedVoice(e.target.value)}
+                className="w-full p-3 text-sm rounded-xl bg-slate-50 border border-slate-200/60 focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-slate-700"
+              >
+                {VOICE_PRESETS.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </div>
           </div>
         </div>
       )}
 
-      {/* 🌟 4. 下部固定入力バー (最前面レイヤー) */}
-      <footer style={{ padding: '16px 24px 30px 24px', boxSizing: 'border-box', zIndex: 200, position: 'relative' }}>
-        <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} isMuted={isMuted} setIsMuted={setIsMuted} unlockAudio={unlockAudio} />
-      </footer>
+      {/* ── メイン画面 ── */}
+      <div className="flex-1 flex flex-col h-full relative max-w-md mx-auto w-full border-x border-slate-100/50 shadow-sm bg-transparent">
+        
+        <header className="px-5 pt-4 pb-2 flex items-center justify-between z-10">
+          <button 
+            onClick={() => setIsSidebarOpen(true)}
+            className="w-11 h-11 rounded-full bg-white shadow-md shadow-slate-100 flex items-center justify-center text-slate-500 active:scale-95 transition-transform"
+          >
+            <Menu size={20} />
+          </button>
 
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => setIsMuted(!isMuted)}
+              className={`w-11 h-11 rounded-full bg-white shadow-md shadow-slate-100 flex items-center justify-center active:scale-95 transition-all ${isMuted ? 'text-red-500 bg-red-50' : 'text-slate-500'}`}
+            >
+              {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+            </button>
+
+            <button 
+              onClick={() => setIsChatMode(!isChatMode)}
+              className={`w-11 h-11 rounded-full bg-white shadow-md shadow-slate-100 flex items-center justify-center active:scale-95 transition-all ${isChatMode ? 'text-blue-500 bg-blue-50' : 'text-slate-500'}`}
+              title="チャットモード切替"
+            >
+              <MessageSquare size={20} />
+            </button>
+
+            <button 
+              onClick={handleNewSession}
+              title="新しい会話を始める"
+              className="h-11 px-4 rounded-full bg-white shadow-md shadow-slate-100 flex items-center justify-center gap-1.5 text-blue-500 font-semibold text-sm active:scale-95 transition-transform border border-blue-50/50"
+            >
+              <Plus size={18} strokeWidth={2.5} />
+              <span>新規</span>
+            </button>
+          </div>
+        </header>
+
+        {isChatMode ? (
+          /* ── テキストチャットモード画面 ── */
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {messages.map((msg) => (
+              <div key={msg.id} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${msg.sender === 'user' ? 'bg-blue-500 text-white' : 'bg-white border border-slate-100 text-slate-700 shadow-sm'}`}>
+                  {msg.text}
+                </div>
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+        ) : (
+          /* ── コンパニオン（3Dモデル）画面 ── */
+          <div className="flex-1 flex flex-col items-center justify-center px-6 relative -mt-12">
+            
+            {/* 💡 3Dキャラの表示エリア（高さを少し確保） */}
+            <div className="relative w-full h-80 flex items-center justify-center">
+              <Companion3D isLoading={isLoading} emotion={currentEmotion} />
+              
+              {/* 地面の落ち影 */}
+              <div className="absolute bottom-2 w-28 h-4 bg-slate-400/15 rounded-full blur-[8px]" />
+            </div>
+
+            {/* 💡 吹き出しのコンテナ：mt-2 から mt-8 に変更して位置を下に下げました */}
+            {latestAiMessage && (
+              <div className="w-full max-w-sm mt-8 relative animate-in fade-in zoom-in-95 duration-200 z-20">
+                {/* 吹き出しの上の尖り（尻尾） */}
+                <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-b-[10px] border-b-white drop-shadow-[0_-2px_2px_rgba(0,0,0,0.02)]" />
+                
+                {/* 吹き出し本体 */}
+                <div className="bg-white rounded-[28px] px-6 py-4 shadow-[0_15px_35px_rgba(0,0,0,0.06)] border border-slate-100/80 text-center">
+                  <p className="text-[16px] leading-relaxed font-medium text-slate-700 tracking-wide select-text">
+                    {latestAiMessage.text}
+                  </p>
+                </div>
+              </div>
+            )}
+            
+            <div className="absolute opacity-0 pointer-events-none">
+              <div ref={messagesEndRef} />
+            </div>
+          </div>
+        )}
+
+        {/* ── フッター：独立した特大マイクボタン ── */}
+        <footer className="p-4 pb-6 bg-transparent z-20">
+          <div className="flex items-end gap-3 max-w-sm mx-auto">
+            
+            <div className="flex-1 bg-white rounded-[28px] shadow-[0_10px_25px_rgba(0,0,0,0.05)] border border-slate-100 flex items-center pl-5 pr-2 h-14 relative">
+              <input
+                type="text"
+                value={textInput}
+                onChange={(e) => setTextInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
+                placeholder="メッセージを入力..."
+                className="flex-1 bg-transparent text-[15px] focus:outline-none text-slate-700 font-medium h-full"
+              />
+              <button 
+                onClick={() => alert("画像認識機能は準備中です！")}
+                className="w-10 h-10 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-600 active:bg-slate-50 transition-colors"
+                title="画像を送る"
+              >
+                <ImageIcon size={20} />
+              </button>
+            </div>
+
+            <button 
+              onClick={() => {
+                if (textInput.trim()) {
+                  handleSendText();
+                } else {
+                  unlockAudio();
+                  sendMessage("音声認識のテスト発言です", true);
+                }
+              }}
+              disabled={isLoading}
+              className={`w-16 h-16 rounded-full flex items-center justify-center text-white shadow-xl shrink-0 active:scale-95 transition-all duration-200 ${
+                isLoading 
+                  ? 'bg-slate-300 shadow-none' 
+                  : textInput.trim() 
+                    ? 'bg-blue-500 shadow-blue-500/30' 
+                    : 'bg-gradient-to-tr from-blue-500 to-indigo-500 shadow-blue-500/40'
+              }`}
+            >
+              {textInput.trim() ? (
+                <Send size={24} className="ml-1" />
+              ) : (
+                <Mic size={28} strokeWidth={2.5} />
+              )}
+            </button>
+            
+          </div>
+        </footer>
+
+      </div>
     </div>
   );
 }
-
-export default App;

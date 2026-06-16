@@ -9,9 +9,6 @@ import type { Message, ChatSession, LongTermMemory, FollowUp, UserDictionary, In
 export { VOICE_PRESETS };
 export type { Message, ChatSession };
 
-// ========================================================
-// 💡 時間コンテキスト取得ヘルパー
-// ========================================================
 const getTimeContext = () => {
   const now = new Date();
   const hour = now.getHours();
@@ -93,9 +90,6 @@ export const useCompanionChat = (sessionId: string | null) => {
     setSessions(list);
   };
 
-  // ========================================================
-  // 💡 スマートプール方式：挨拶の0秒出力
-  // ========================================================
   const generateDynamicGreeting = async () => {
     setIsLoading(true);
     try {
@@ -108,15 +102,12 @@ export const useCompanionChat = (sessionId: string | null) => {
         const chosen = candidates[Math.floor(Math.random() * candidates.length)];
 
         setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: chosen.greeting_text, emotion: 'happy' }]);
-
         if (chosen.id) await dbService.deleteGreeting(chosen.id);
         setIsLoading(false);
         return;
       }
-
       setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: "やあ！調子はどう？", emotion: 'neutral' }]);
       generateGreetingPoolInBackground();
-
     } catch (error) {
       console.error("Greeting retrieval failed", error);
       setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: "やあ！調子はどう？", emotion: 'neutral' }]);
@@ -131,21 +122,10 @@ export const useCompanionChat = (sessionId: string | null) => {
       const validMemories = memoriesRef.current.filter(m => m.allow_small_talk).map(m => m.content).join('、') || 'なし';
       const interestStrings = interestsRef.current.map(i => `${i.topic}(関心度:${i.interest_level})`).join('、') || 'なし';
 
-      const prompt = `
-      あなたはユーザーの専属AIコンパニオンです。次回ユーザーがアプリを開いた瞬間に表示する「最初の話しかけ（1〜2文程度）」の候補を5個作成し、JSONの配列形式で出力してください。
-
-      [ユーザーデータ]
-      ・雑談可能な記憶: ${validMemories}
-      ・関心事: ${interestStrings}
-      ・現在想定される時間コンテキスト: ${tag}
-
-      出力は必ず以下のJSON配列のみとしてください。
-      ["候補1", "候補2", "候補3", "候補4", "候補5"]
-      `;
+      const prompt = `あなたはユーザーの専属AIコンパニオンです。次回アプリ起動時に表示する「最初の話しかけ（1〜2文）」の候補を5個、JSON配列で出力してください。\n[データ]\n雑談可能な記憶: ${validMemories}\n関心事: ${interestStrings}\n時間コンテキスト: ${tag}\n出力は ["候補1", "候補2"...] のみ。`;
 
       const result = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
-      const text = result.text || '';
-      const jsonMatch = text.match(/\[.*\]/s);
+      const jsonMatch = (result.text || '').match(/\[.*\]/s);
 
       if (jsonMatch) {
         const candidates = JSON.parse(jsonMatch[0]);
@@ -203,36 +183,24 @@ export const useCompanionChat = (sessionId: string | null) => {
         const startTime = Date.now();
 
         await aiService.runPipeline(
-          currentModel,
-          ai,
-          userText,
-          chatContextText,
-          tavilyKey || '',
-          memoryStrings,
-          followUpStrings,
-          dictStrings,
-          interestStrings,
+          currentModel, ai, userText, chatContextText, tavilyKey || '', memoryStrings, followUpStrings, dictStrings, interestStrings,
 
-          // ── 1次回答（クイック・レスポンス / 相槌）──
+          // ── STEP 1: フロント対応 ──
           async (api1Result) => {
-            const elapsed = Date.now() - startTime;
-            const delay = Math.max(0, 1000 - elapsed);
+            const delay = Math.max(0, 500 - (Date.now() - startTime));
             const quickEmotion = (api1Result.emotion as any) || 'neutral';
             const isCompleted = api1Result.is_completed;
 
             setTimeout(() => {
               setMessages((prev) => prev.map((msg) => msg.id === userMessageId ? { ...msg, text: api1Result.user_display_text } : msg));
               
-              // 💡 相槌（1次回答）を履歴に残す。即答完結パターンの場合は「思考中(isQuickResponse)」フラグをfalseにする
               setMessages((prev) => [...prev, { id: api1MessageId, sender: 'ai', text: api1Result.quick_response, isQuickResponse: !isCompleted, emotion: quickEmotion }]);
-
               if (isVoiceInput) playVoiceWrapper(api1Result.quick_response);
 
-              // 💡 相槌も大事な会話文脈の一部として、すべてDBに保存
               dbService.saveMessage(userMessageId, sessionId, 'user', api1Result.user_display_text).catch(console.error);
               dbService.saveMessage(api1MessageId, sessionId, 'ai', api1Result.quick_response).catch(console.error);
 
-              // 💡 即答完結パターンの場合、ここで全処理を終了して次の挨拶を準備
+              // 💡 完結時はここでローディングを解除。バックグラウンドでSTEP 3（記憶抽出）が走る
               if (isCompleted) {
                 setIsLoading(false);
                 generateGreetingPoolInBackground();
@@ -240,53 +208,41 @@ export const useCompanionChat = (sessionId: string | null) => {
             }, delay);
           },
 
-          // ── 本回答（最終アンサー）※ is_completed === false のみ実行 ──
-          (rawFinalAnswer) => {
-            const elapsed = Date.now() - startTime;
-            const delay = Math.max(0, 1500 - elapsed);
-
-            let finalEmotion: 'neutral' | 'happy' | 'sad' | 'surprised' = 'neutral';
-            let finalAnswerText = rawFinalAnswer;
-            const emotionMatch = rawFinalAnswer.match(/^\[(neutral|happy|sad|surprised)\]/i);
-            if (emotionMatch) {
-              finalEmotion = emotionMatch[1].toLowerCase() as any;
-              finalAnswerText = rawFinalAnswer.replace(/^\[.*?\]\s*/, '');
+          // ── STEP 3: 最終監査 ＆ 記憶抽出 ──
+          (api3Result, isCompleted) => {
+            // STEP 1で完結しなかった場合のみ、新しい吹き出しとして本回答を表示
+            if (!isCompleted) {
+              const delay = Math.max(0, 1500 - (Date.now() - startTime));
+              setTimeout(() => {
+                setMessages((prev) => prev.map((msg) => msg.id === api1MessageId ? { ...msg, isQuickResponse: false } : msg));
+                setMessages((prev) => [...prev, { id: api2MessageId, sender: 'ai', text: api3Result.final_answer, isQuickResponse: false, emotion: api3Result.emotion || 'neutral' }]);
+                
+                if (isVoiceInput) playVoiceWrapper(api3Result.final_answer);
+                dbService.saveMessage(api2MessageId, sessionId, 'ai', api3Result.final_answer).catch(console.error);
+                
+                setIsLoading(false);
+                generateGreetingPoolInBackground();
+              }, delay);
             }
 
-            setTimeout(() => {
-              // 💡 相槌（api1MessageId）はそのまま残し、思考中(点滅)の演出のみを解除する
-              setMessages((prev) => prev.map((msg) => msg.id === api1MessageId ? { ...msg, isQuickResponse: false } : msg));
-              // 相槌から綺麗に繋がる後半部分（本回答）を、別の吹き出しとして追加
-              setMessages((prev) => [...prev, { id: api2MessageId, sender: 'ai', text: finalAnswerText, isQuickResponse: false, emotion: finalEmotion }]);
-              
-              if (isVoiceInput) playVoiceWrapper(finalAnswerText);
-              
-              dbService.saveMessage(api2MessageId, sessionId, 'ai', finalAnswerText).catch(console.error);
-              setIsLoading(false);
-
-              generateGreetingPoolInBackground();
-            }, delay);
-          },
-
-          // ── 抽出情報の保存（EXTRACTOR）──
-          (extracted: any) => {
-            if (extracted.memories) {
-              extracted.memories.forEach((m: { content: string, category: string, importance?: number, memory_type?: string, allow_small_talk?: boolean }) => 
+            // ── 抽出された記憶の保存処理（完結の有無に関わらず必ず実行） ──
+            if (api3Result.memories) {
+              api3Result.memories.forEach((m: any) => 
                 dbService.saveMemory(m.content, m.category, m.importance ?? 3, m.memory_type ?? 'fact', m.allow_small_talk ?? true).catch(console.error)
               );
             }
-            if (extracted.follow_ups) {
-              extracted.follow_ups.forEach((f: { topic: string, context: string, is_resolved: boolean, target_date?: string }) => 
+            if (api3Result.follow_ups) {
+              api3Result.follow_ups.forEach((f: any) => 
                 dbService.saveFollowUp(f.topic, f.context, f.is_resolved, f.target_date).catch(console.error)
               );
             }
-            if (extracted.user_dictionary) {
-              extracted.user_dictionary.forEach((d: { term: string, meaning: string }) => 
+            if (api3Result.user_dictionary) {
+              api3Result.user_dictionary.forEach((d: any) => 
                 dbService.saveDictionary(d.term, d.meaning).catch(console.error)
               );
             }
-            if (extracted.interests) {
-              extracted.interests.forEach((i: { topic: string }) => 
+            if (api3Result.interests) {
+              api3Result.interests.forEach((i: any) => 
                 dbService.saveInterest(i.topic).catch(console.error)
               );
             }

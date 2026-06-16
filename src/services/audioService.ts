@@ -1,3 +1,4 @@
+// src/services/audioService.ts
 export const VOICE_PRESETS = [
   { id: 'ja-JP-Neural2-B', name: 'ハツラツ（女性）' },
   { id: 'ja-JP-Wavenet-A', name: '落ち着いた（女性）' },
@@ -5,51 +6,31 @@ export const VOICE_PRESETS = [
   { id: 'ja-JP-Neural2-D', name: '渋い・低音（男性）' },
 ];
 
-// 💡 `<audio>` タグを廃止し、システムレベルの音響エンジン「AudioContext」を使用する
-let audioCtx: AudioContext | null = null;
-let currentSource: AudioBufferSourceNode | null = null;
-
-// AudioContextの初期化（ブラウザ互換性対応）
-const initAudioContext = () => {
-  if (!audioCtx && typeof window !== 'undefined') {
-    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-    if (AudioContextClass) {
-      audioCtx = new AudioContextClass();
-    }
-  }
-};
+let globalAudio: HTMLAudioElement | null = null;
+let currentBlobUrl: string | null = null;
 
 export const audioService = {
-  // 💡 マイク・送信ボタンをタップした瞬間に実行し、iOSのブロックを解除する
   unlock: () => {
-    initAudioContext();
-    if (audioCtx) {
-      // 一時停止状態なら再開
-      if (audioCtx.state === 'suspended') {
-        audioCtx.resume();
-      }
-      // 無音のダミーバッファを一瞬だけ再生して、iOSに「再生権限」を完璧に記憶させる
-      const buffer = audioCtx.createBuffer(1, 1, 22050);
-      const source = audioCtx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(audioCtx.destination);
-      source.start(0);
+    if (typeof window === 'undefined') return;
+    if (!globalAudio) {
+      globalAudio = new Audio();
     }
+    // ユーザーアクションの瞬間にダミー再生でiOSの制限を突破
+    globalAudio.play().then(() => {
+      globalAudio?.pause();
+    }).catch(() => {});
   },
 
-  // ミュート時の即時停止
   stop: () => {
-    if (currentSource) {
-      try { currentSource.stop(); } catch (e) {}
-      currentSource = null;
+    if (globalAudio) {
+      globalAudio.pause();
+      globalAudio.currentTime = 0;
     }
   },
 
-  // 音声データの取得と再生
   play: async (text: string, voiceId: string, gcloudApiKey: string): Promise<void> => {
-    if (!gcloudApiKey) return;
-    initAudioContext();
-    audioService.stop(); // 喋っている最中なら止める
+    if (!gcloudApiKey || !globalAudio) return;
+    audioService.stop();
 
     return new Promise(async (resolve) => {
       try {
@@ -65,7 +46,6 @@ export const audioService = {
         const data = await response.json();
         if (!data.audioContent) { resolve(); return; }
 
-        // 💡 Base64テキストをバイナリ配列に変換
         const binaryString = window.atob(data.audioContent);
         const len = binaryString.length;
         const bytes = new Uint8Array(len);
@@ -73,31 +53,18 @@ export const audioService = {
             bytes[i] = binaryString.charCodeAt(i);
         }
 
-        if (!audioCtx) { resolve(); return; }
+        const blob = new Blob([bytes], { type: 'audio/mp3' });
+        if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+        currentBlobUrl = URL.createObjectURL(blob);
 
-        // 💡 iOSの通話モード（カープレイ）に負けない「メモリ上でのデコード＆再生」
-        audioCtx.decodeAudioData(bytes.buffer, (buffer) => {
-          const source = audioCtx!.createBufferSource();
-          source.buffer = buffer;
-          source.connect(audioCtx!.destination);
-          source.onended = () => resolve();
-          
-          currentSource = source;
-
-          // 万が一AudioContextが寝ていれば叩き起こしてから再生
-          if (audioCtx!.state === 'suspended') {
-            audioCtx!.resume().then(() => source.start(0));
-          } else {
-            source.start(0);
-          }
-        }, (e) => {
-          console.error("音声デコードエラー:", e);
-          resolve();
-        });
+        globalAudio!.src = currentBlobUrl;
+        globalAudio!.onended = () => resolve();
+        globalAudio!.onerror = () => resolve();
+        await globalAudio!.play();
 
       } catch (err) { 
-        console.error("音声再生通信エラー:", err);
-        resolve(); 
+        console.error("音声再生エラー:", err);
+        resolve();
       }
     });
   }

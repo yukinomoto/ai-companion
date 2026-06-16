@@ -1,3 +1,4 @@
+// src/components/ChatInput.tsx
 import { useState, useRef, useEffect } from 'react';
 
 interface ChatInputProps {
@@ -17,11 +18,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
   useEffect(() => { textRef.current = text; }, [text]);
   const onSendMessageRef = useRef(onSendMessage);
   useEffect(() => { onSendMessageRef.current = onSendMessage; }, [onSendMessage]);
+  
   const isManualStopRef = useRef(false);
   const wasVoiceInputRef = useRef(false);
 
+  // 💡 音声認識インスタンスの一元管理（毎回生成せず使い回すことで、都度の許可要求を防ぐ）
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && !recognitionRef.current) {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (SpeechRecognition) {
         const recognition = new SpeechRecognition();
@@ -39,7 +42,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
             wasVoiceInputRef.current = true;
           }
         };
-        recognition.onerror = () => setIsRecording(false);
+
+        recognition.onerror = (event: any) => {
+          console.error("音声認識エラー:", event.error);
+          setIsRecording(false);
+        };
+
         recognition.onend = () => {
           setIsRecording(false);
           if (isManualStopRef.current) {
@@ -54,14 +62,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
         recognitionRef.current = recognition;
       }
     }
-    return () => { if (recognitionRef.current) recognitionRef.current.abort(); };
+    return () => {
+      // コンポーネント破棄時のみ終了する
+    };
   }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     unlockAudio();
     if (!text.trim() || isLoading) return;
-    
+
     if (isRecording && recognitionRef.current) {
       isManualStopRef.current = true;
       recognitionRef.current.stop();
@@ -75,6 +85,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
   const toggleRecording = () => {
     unlockAudio();
     if (!recognitionRef.current || isLoading) return;
+
     if (isRecording) {
       isManualStopRef.current = true;
       recognitionRef.current.stop();
@@ -82,7 +93,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
       setText(''); 
       isManualStopRef.current = false;
       wasVoiceInputRef.current = true;
-      try { recognitionRef.current.start(); setIsRecording(true); } catch (e) {}
+      try {
+        // 💡 既に動いている場合は一度止めてから綺麗にスタート
+        recognitionRef.current.abort();
+        setTimeout(() => {
+          recognitionRef.current.start();
+          setIsRecording(true);
+        }, 50);
+      } catch (e) {
+        console.error("録音開始失敗:", e);
+      }
     }
   };
 
@@ -93,8 +113,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
       padding: '10px 16px', borderRadius: '40px', border: '1px solid rgba(255,255,255,1)',
       boxShadow: '0 12px 32px rgba(0,0,0,0.08)' 
     }}>
-      
-      {/* 💡 キーボードアイコン (SVG) */}
       <button type="button" style={{ background: 'none', border: 'none', padding: '8px', cursor: 'pointer', display: 'flex' }}>
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect>
@@ -104,14 +122,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
         </svg>
       </button>
 
-      {/* テキスト入力 */}
       <input 
         type="text" className="selectable-text" value={text} onChange={(e) => setText(e.target.value)} 
         placeholder={isRecording ? "聞き取り中..." : "話しかけてみる..."} disabled={isLoading} 
         style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: '15px', color: '#1e293b', fontWeight: 500, textAlign: 'center' }} 
       />
 
-      {/* 💡 マイクボタン (グラデーション背景 + SVG) */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         {isRecording ? (
           <button type="button" disabled={isLoading} onClick={toggleRecording} style={{ background: '#ef4444', border: 'none', width: '48px', height: '48px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(239,68,68,0.3)' }}>
@@ -128,7 +144,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
         )}
       </div>
 
-      {/* 💡 画像アイコン (SVG) */}
       <button type="button" onClick={() => alert("画像認識は開発中です")} style={{ background: 'none', border: 'none', padding: '8px', cursor: 'pointer', display: 'flex' }}>
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline>
