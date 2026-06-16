@@ -94,7 +94,7 @@ export const useCompanionChat = (sessionId: string | null) => {
   };
 
   // ========================================================
-  // 💡 スマートプール方式：挨拶の0秒出力（DB連携版）
+  // 💡 スマートプール方式：挨拶の0秒出力
   // ========================================================
   const generateDynamicGreeting = async () => {
     setIsLoading(true);
@@ -137,7 +137,7 @@ export const useCompanionChat = (sessionId: string | null) => {
       [ユーザーデータ]
       ・雑談可能な記憶: ${validMemories}
       ・関心事: ${interestStrings}
-      ・現在想定される時間コンテキスト: ${tag} （この時間帯に合った挨拶や気遣いを含めること）
+      ・現在想定される時間コンテキスト: ${tag}
 
       出力は必ず以下のJSON配列のみとしてください。
       ["候補1", "候補2", "候補3", "候補4", "候補5"]
@@ -213,30 +213,38 @@ export const useCompanionChat = (sessionId: string | null) => {
           dictStrings,
           interestStrings,
 
-          // ── 1次回答（クイック・レスポンス）──
+          // ── 1次回答（クイック・レスポンス / 相槌）──
           async (api1Result) => {
             const elapsed = Date.now() - startTime;
             const delay = Math.max(0, 1000 - elapsed);
-            // 💡 感情をパース
             const quickEmotion = (api1Result.emotion as any) || 'neutral';
+            const isCompleted = api1Result.is_completed;
 
             setTimeout(() => {
               setMessages((prev) => prev.map((msg) => msg.id === userMessageId ? { ...msg, text: api1Result.user_display_text } : msg));
-              setMessages((prev) => [...prev, { id: api1MessageId, sender: 'ai', text: api1Result.quick_response, isQuickResponse: true, emotion: quickEmotion }]);
+              
+              // 💡 相槌（1次回答）を履歴に残す。即答完結パターンの場合は「思考中(isQuickResponse)」フラグをfalseにする
+              setMessages((prev) => [...prev, { id: api1MessageId, sender: 'ai', text: api1Result.quick_response, isQuickResponse: !isCompleted, emotion: quickEmotion }]);
 
               if (isVoiceInput) playVoiceWrapper(api1Result.quick_response);
 
+              // 💡 相槌も大事な会話文脈の一部として、すべてDBに保存
               dbService.saveMessage(userMessageId, sessionId, 'user', api1Result.user_display_text).catch(console.error);
               dbService.saveMessage(api1MessageId, sessionId, 'ai', api1Result.quick_response).catch(console.error);
+
+              // 💡 即答完結パターンの場合、ここで全処理を終了して次の挨拶を準備
+              if (isCompleted) {
+                setIsLoading(false);
+                generateGreetingPoolInBackground();
+              }
             }, delay);
           },
 
-          // ── 本回答（最終アンサー）──
+          // ── 本回答（最終アンサー）※ is_completed === false のみ実行 ──
           (rawFinalAnswer) => {
             const elapsed = Date.now() - startTime;
             const delay = Math.max(0, 1500 - elapsed);
 
-            // 💡 EDITORが出力した [happy] などのタグをパースして消去
             let finalEmotion: 'neutral' | 'happy' | 'sad' | 'surprised' = 'neutral';
             let finalAnswerText = rawFinalAnswer;
             const emotionMatch = rawFinalAnswer.match(/^\[(neutral|happy|sad|surprised)\]/i);
@@ -246,7 +254,9 @@ export const useCompanionChat = (sessionId: string | null) => {
             }
 
             setTimeout(() => {
+              // 💡 相槌（api1MessageId）はそのまま残し、思考中(点滅)の演出のみを解除する
               setMessages((prev) => prev.map((msg) => msg.id === api1MessageId ? { ...msg, isQuickResponse: false } : msg));
+              // 相槌から綺麗に繋がる後半部分（本回答）を、別の吹き出しとして追加
               setMessages((prev) => [...prev, { id: api2MessageId, sender: 'ai', text: finalAnswerText, isQuickResponse: false, emotion: finalEmotion }]);
               
               if (isVoiceInput) playVoiceWrapper(finalAnswerText);
