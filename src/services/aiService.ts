@@ -100,7 +100,7 @@ export const aiService = {
 
     const api2Response = await ai.models.generateContent({
       model,
-      contents: `【現在日時】\n${currentDateStr}\n\n【ユーザーに関する長期記憶】\n${memoriesContext}\n【未解決の話題】\n${followUpsContext}\n【ユーザー辞書】\n${dictContext}\n【ユーザーの興味・関心】\n${interestsContext}\n\n【会話文脈】\n${chatContextText}\n【検索結果】\n${webContext}\n【ユーザーの入力】\n"${api1Result.corrected_query}"`,
+      contents: `【現在日時】\n${currentDateStr}\n\n【ユーザーに関する長期記憶】\n${memoriesContext}\n【未解決の話題】\n${followUpsContext}\n【ユーザー辞書】\n${dictContext}\n【ユーザーの興味・関心】\n${interestsContext}\n\n【会話文脈】\n${chatContextText}\n【検索結果】\n${webContext}\n\n【あなたが直前に返した相槌】\n"${api1Result.quick_response}"\n\n【ユーザーの入力】\n"${api1Result.corrected_query}"`,
       config: { systemInstruction: SYSTEM_PROMPTS.THINKER }
     });
 
