@@ -4,12 +4,14 @@ import { useCompanionChat, VOICE_PRESETS } from './hooks/useCompanionChat';
 import { dbService } from './services/dbService';
 import { Companion3D } from './components/Companion3D';
 import { ChatInput } from './components/ChatInput';
-import { Menu, MessageSquare, Plus, Volume2, VolumeX, History } from 'lucide-react';
+import { MotionTest } from './components/MotionTest'; // 💡 追加：テスト用コンポーネント
+import { Menu, MessageSquare, Plus, Volume2, VolumeX, History, Activity } from 'lucide-react'; // 💡 Activityアイコンを追加
 
 export default function App() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isChatMode, setIsChatMode] = useState(false);
+  const [isMotionTestMode, setIsMotionTestMode] = useState(false); // 💡 追加：テストモードのON/OFF
 
   const { 
     messages, isLoading, sendMessage, selectedVoice, setSelectedVoice, 
@@ -99,7 +101,12 @@ export default function App() {
               {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
             </button>
 
-            <button onClick={() => setIsChatMode(!isChatMode)} className={`w-11 h-11 rounded-full bg-white shadow-md shadow-slate-100 flex items-center justify-center active:scale-95 transition-all ${isChatMode ? 'text-blue-500 bg-blue-50' : 'text-slate-500'}`} title="チャットモード切替">
+            {/* 💡 追加：モーションテストモード切替ボタン */}
+            <button onClick={() => setIsMotionTestMode(!isMotionTestMode)} className={`w-11 h-11 rounded-full bg-white shadow-md shadow-slate-100 flex items-center justify-center active:scale-95 transition-all ${isMotionTestMode ? 'text-amber-500 bg-amber-50' : 'text-slate-500'}`} title="モーションテスト">
+              <Activity size={20} />
+            </button>
+
+            <button onClick={() => {setIsChatMode(!isChatMode); setIsMotionTestMode(false);}} className={`w-11 h-11 rounded-full bg-white shadow-md shadow-slate-100 flex items-center justify-center active:scale-95 transition-all ${isChatMode && !isMotionTestMode ? 'text-blue-500 bg-blue-50' : 'text-slate-500'}`} title="チャットモード切替">
               <MessageSquare size={20} />
             </button>
 
@@ -110,7 +117,12 @@ export default function App() {
           </div>
         </header>
 
-        {isChatMode ? (
+        {/* 💡 表示切り替えロジック：テストモードの場合は MotionTest を表示 */}
+        {isMotionTestMode ? (
+          <div className="flex-1 overflow-hidden relative">
+            <MotionTest />
+          </div>
+        ) : isChatMode ? (
           /* ── テキストチャットモード画面 ── */
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {messages.map((msg) => (
@@ -154,18 +166,20 @@ export default function App() {
           </div>
         )}
 
-        {/* ── フッター：ChatInputコンポーネントを統合 ── */}
-        <footer className="p-4 pb-6 bg-transparent z-20">
-          <div className="max-w-sm mx-auto w-full">
-            <ChatInput 
-              onSendMessage={handleSendText} 
-              isLoading={isLoading} 
-              isMuted={isMuted} 
-              setIsMuted={setIsMuted} 
-              unlockAudio={unlockAudio} 
-            />
-          </div>
-        </footer>
+        {/* ── フッター：テストモード時は非表示にする ── */}
+        {!isMotionTestMode && (
+          <footer className="p-4 pb-6 bg-transparent z-20">
+            <div className="max-w-sm mx-auto w-full">
+              <ChatInput 
+                onSendMessage={handleSendText} 
+                isLoading={isLoading} 
+                isMuted={isMuted} 
+                setIsMuted={setIsMuted} 
+                unlockAudio={unlockAudio} 
+              />
+            </div>
+          </footer>
+        )}
 
       </div>
     </div>
