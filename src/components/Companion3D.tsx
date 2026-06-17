@@ -91,7 +91,8 @@ const FaceScreen = ({ emotion, headNode, config }: { emotion: Emotion, headNode:
 
 // ── 🤖 ロボットモデル本体 ──
 function RobotModel({ isLoading = false, emotion = 'neutral', faceConfig = DEFAULT_FACE_CONFIG }: Companion3DProps) {
-  const { scene } = useGLTF("/robot_draco.glb", "https://www.gstatic.com/draco/v1/decoders/");  const modelRef = useRef<THREE.Group>(null);
+  const { scene } = useGLTF("/robot_small.glb");
+  const modelRef = useRef<THREE.Group>(null);
   const [headNode, setHeadNode] = useState<THREE.Object3D | null>(null);
 
   const nodes = useRef<Record<string, THREE.Object3D | null>>({});
@@ -273,4 +274,4 @@ export function Companion3D({ isLoading = false, emotion = 'neutral', faceConfig
   );
 }
 
-useGLTF.preload("/robot_draco.glb", "https://www.gstatic.com/draco/v1/decoders/");
+useGLTF.preload("/robot_small.glb");
