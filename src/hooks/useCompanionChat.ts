@@ -90,51 +90,10 @@ export const useCompanionChat = (sessionId: string | null) => {
     setSessions(list);
   };
 
-  const generateDynamicGreeting = async () => {
-    setIsLoading(true);
+  // 💡 プロンプトを変えずに、引数で指定された時間帯のストックを補充するよう改修
+  const generateGreetingPoolInBackground = async (targetTag?: string) => {
     try {
-      const pool = await dbService.getGreetingPool();
-      const { tag } = getTimeContext();
-
-      const matchedGreetings = pool.filter(p => p.context_type === tag || p.context_type === 'neutral');
-
-      if (matchedGreetings.length > 0) {
-        const chosen = matchedGreetings[Math.floor(Math.random() * matchedGreetings.length)];
-        setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: chosen.greeting_text, emotion: 'happy' }]);
-        if (chosen.id) await dbService.deleteGreeting(chosen.id);
-        
-        // 💡 修正箇所：ストックが減ってきたら（残り3個以下）、枯渇する前に裏で補充する
-        if (matchedGreetings.length <= 3) {
-          generateGreetingPoolInBackground();
-        }
-        
-        setIsLoading(false);
-        return;
-      }
-      
-      let defaultGreeting = "やあ！調子はどう？";
-      if (tag.includes('morning')) defaultGreeting = "おはよう！よく眠れた？";
-      else if (tag.includes('evening') || tag === 'night' || tag === 'friday_night') defaultGreeting = "こんばんは！今日もお疲れ様。";
-      else if (tag === 'afternoon') defaultGreeting = "こんにちは！調子はどう？";
-
-      setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: defaultGreeting, emotion: 'neutral' }]);
-      generateGreetingPoolInBackground();
-    } catch (error) {
-      console.error("Greeting retrieval failed", error);
-      let defaultGreeting = "やあ！調子はどう？";
-      const { tag } = getTimeContext();
-      if (tag.includes('morning')) defaultGreeting = "おはよう！よく眠れた？";
-      else if (tag.includes('evening') || tag === 'night' || tag === 'friday_night') defaultGreeting = "こんばんは！今日もお疲れ様。";
-      else if (tag === 'afternoon') defaultGreeting = "こんにちは！調子はどう？";
-      setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: defaultGreeting, emotion: 'neutral' }]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const generateGreetingPoolInBackground = async () => {
-    try {
-      const { tag } = getTimeContext();
+      const tag = targetTag || getTimeContext().tag;
       const validMemories = memoriesRef.current.filter(m => m.allow_small_talk).map(m => m.content).join('、') || 'なし';
       const interestStrings = interestsRef.current.map(i => `${i.topic}(関心度:${i.interest_level})`).join('、') || 'なし';
       const prompt = `あなたはユーザーの専属AIコンパニオンです。次回アプリ起動時に表示する「最初の話しかけ（1〜2文）」の候補を5個、JSON配列で出力してください。\n[データ]\n雑談可能な記憶: ${validMemories}\n関心事: ${interestStrings}\n時間コンテキスト: ${tag}\n出力は ["候補1", "候補2"...] のみ。`;
@@ -151,7 +110,59 @@ export const useCompanionChat = (sessionId: string | null) => {
         }
       }
     } catch (error) {
-      console.error("Background pool generation failed", error);
+      console.error("Background pool generation failed for tag:", targetTag, error);
+    }
+  };
+
+  // 💡 全時間帯のストックをチェックし、足りないものがあれば裏で補充する関数
+  const checkAndReplenishAllPools = (currentPool: any[]) => {
+    const timeTags = ['morning', 'afternoon', 'evening', 'night'];
+    timeTags.forEach(tag => {
+      const count = currentPool.filter((p: any) => p.context_type === tag).length;
+      if (count <= 3) {
+        // 残り3個以下なら、その時間帯を指定して生成を回す（プロンプトは変更なし）
+        generateGreetingPoolInBackground(tag);
+      }
+    });
+  };
+
+  const generateDynamicGreeting = async () => {
+    setIsLoading(true);
+    try {
+      const pool = await dbService.getGreetingPool();
+      const { tag } = getTimeContext();
+
+      // 裏で全時間帯の残量をチェック＆自動補充
+      checkAndReplenishAllPools(pool);
+
+      const matchedGreetings = pool.filter(p => p.context_type === tag || p.context_type === 'neutral');
+
+      if (matchedGreetings.length > 0) {
+        const chosen = matchedGreetings[Math.floor(Math.random() * matchedGreetings.length)];
+        setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: chosen.greeting_text, emotion: 'happy' }]);
+        if (chosen.id) await dbService.deleteGreeting(chosen.id);
+        
+        setIsLoading(false);
+        return;
+      }
+      
+      let defaultGreeting = "やあ！調子はどう？";
+      if (tag.includes('morning')) defaultGreeting = "おはよう！よく眠れた？";
+      else if (tag.includes('evening') || tag === 'night' || tag === 'friday_night') defaultGreeting = "こんばんは！今日もお疲れ様。";
+      else if (tag === 'afternoon') defaultGreeting = "こんにちは！調子はどう？";
+
+      setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: defaultGreeting, emotion: 'neutral' }]);
+      
+    } catch (error) {
+      console.error("Greeting retrieval failed", error);
+      let defaultGreeting = "やあ！調子はどう？";
+      const { tag } = getTimeContext();
+      if (tag.includes('morning')) defaultGreeting = "おはよう！よく眠れた？";
+      else if (tag.includes('evening') || tag === 'night' || tag === 'friday_night') defaultGreeting = "こんばんは！今日もお疲れ様。";
+      else if (tag === 'afternoon') defaultGreeting = "こんにちは！調子はどう？";
+      setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: defaultGreeting, emotion: 'neutral' }]);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -208,7 +219,6 @@ export const useCompanionChat = (sessionId: string | null) => {
         await aiService.runPipeline(
           currentModel, ai, userText, chatContextText, tavilyKey || '', memoryStrings, followUpStrings, dictStrings, interestStrings,
 
-          // ── STEP 1: フロント対応 ──
           async (api1Result) => {
             const delay = Math.max(0, 500 - (Date.now() - startTime));
             const quickEmotion = (api1Result.emotion as any) || 'neutral';
@@ -225,12 +235,10 @@ export const useCompanionChat = (sessionId: string | null) => {
 
               if (isCompleted) {
                 setIsLoading(false);
-                generateGreetingPoolInBackground();
               }
             }, delay);
           },
 
-          // ── STEP 3: 最終監査 ＆ 記憶抽出 ──
           (api3Result, isCompleted) => {
             if (!isCompleted) {
               const delay = Math.max(0, 1500 - (Date.now() - startTime));
@@ -243,7 +251,6 @@ export const useCompanionChat = (sessionId: string | null) => {
                 dbService.saveMessage(api2MessageId, activeSessionId, 'ai', api3Result.final_answer).catch(console.error);
                 
                 setIsLoading(false);
-                generateGreetingPoolInBackground();
               }, delay);
             }
 
