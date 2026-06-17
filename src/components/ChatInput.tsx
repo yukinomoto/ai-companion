@@ -22,7 +22,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
   const isManualStopRef = useRef(false);
   const wasVoiceInputRef = useRef(false);
 
-  // 💡 音声認識インスタンスの一元管理（毎回生成せず使い回すことで、都度の許可要求を防ぐ）
   useEffect(() => {
     if (typeof window !== 'undefined' && !recognitionRef.current) {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -50,14 +49,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
 
         recognition.onend = () => {
           setIsRecording(false);
-          // 💡 ここにあった isManualStopRef による勝手な自動送信ロジックを完全削除
         };
         recognitionRef.current = recognition;
       }
     }
-    return () => {
-      // コンポーネント破棄時のみ終了する
-    };
+    return () => {};
   }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -67,10 +63,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
 
     if (isRecording && recognitionRef.current) {
       recognitionRef.current.stop();
-      isManualStopRef.current = true; // 明示的な停止フラグ
+      isManualStopRef.current = true; 
     }
     
-    // 💡 ユーザーが送信ボタンを押した時だけ送信処理を走らせる
     onSendMessage(text, wasVoiceInputRef.current);
     setText('');
     wasVoiceInputRef.current = false;
@@ -88,7 +83,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
       isManualStopRef.current = false;
       wasVoiceInputRef.current = true;
       try {
-        // 💡 既に動いている場合は一度止めてから綺麗にスタート
+        // 💡 マイクの許可が何度も聞かれるのを防ぐため、リセット処理を復活
         recognitionRef.current.abort();
         setTimeout(() => {
           recognitionRef.current.start();
@@ -116,10 +111,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
         </svg>
       </button>
 
+      {/* 💡 fontSize を 15px から 16px に変更し、iOS Safariの勝手な画面拡大・スクロールを完全に封殺 */}
       <input 
         type="text" className="selectable-text" value={text} onChange={(e) => setText(e.target.value)} 
         placeholder={isRecording ? "聞き取り中..." : "話しかけてみる..."} disabled={isLoading} 
-        style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: '15px', color: '#1e293b', fontWeight: 500, textAlign: 'center' }} 
+        style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: '16px', color: '#1e293b', fontWeight: 500, textAlign: 'center' }} 
       />
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
