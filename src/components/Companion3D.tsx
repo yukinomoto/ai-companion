@@ -35,7 +35,7 @@ const FaceScreen = ({ emotion, headNode, config }: { emotion: Emotion, headNode:
   const rightEye = useRef<THREE.Mesh>(null);
   const blinkTimer = useRef(0);
 
-  useFrame((state, delta) => {
+  useFrame((_, delta) => {
     if (!leftEye.current || !rightEye.current) return;
     let targetScaleY = 1, targetScaleX = 1;
     switch (emotion) {
