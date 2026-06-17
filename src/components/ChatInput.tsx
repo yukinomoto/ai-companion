@@ -22,7 +22,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
   const isManualStopRef = useRef(false);
   const wasVoiceInputRef = useRef(false);
 
-  // 💡 音声認識インスタンスの一元管理（毎回生成せず使い回すことで、都度の許可要求を防ぐ）
   useEffect(() => {
     if (typeof window !== 'undefined' && !recognitionRef.current) {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -50,14 +49,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
 
         recognition.onend = () => {
           setIsRecording(false);
-          // 💡 ここにあった isManualStopRef による勝手な自動送信ロジックを完全削除
         };
         recognitionRef.current = recognition;
       }
     }
-    return () => {
-      // コンポーネント破棄時のみ終了する
-    };
+    return () => {};
   }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -67,10 +63,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
 
     if (isRecording && recognitionRef.current) {
       recognitionRef.current.stop();
-      isManualStopRef.current = true; // 明示的な停止フラグ
+      isManualStopRef.current = true; 
     }
     
-    // 💡 ユーザーが送信ボタンを押した時だけ送信処理を走らせる
     onSendMessage(text, wasVoiceInputRef.current);
     setText('');
     wasVoiceInputRef.current = false;
@@ -88,12 +83,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
       isManualStopRef.current = false;
       wasVoiceInputRef.current = true;
       try {
-        // 💡 既に動いている場合は一度止めてから綺麗にスタート
-        recognitionRef.current.abort();
-        setTimeout(() => {
-          recognitionRef.current.start();
-          setIsRecording(true);
-        }, 50);
+        // 💡 許可ダイアログ再発の原因になっていた abort() と setTimeout を撤去し、直接起動
+        recognitionRef.current.start();
+        setIsRecording(true);
       } catch (e) {
         console.error("録音開始失敗:", e);
       }

@@ -102,11 +102,16 @@ export const useCompanionChat = (sessionId: string | null) => {
         const chosen = matchedGreetings[Math.floor(Math.random() * matchedGreetings.length)];
         setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: chosen.greeting_text, emotion: 'happy' }]);
         if (chosen.id) await dbService.deleteGreeting(chosen.id);
+        
+        // 💡 修正箇所：ストックが減ってきたら（残り3個以下）、枯渇する前に裏で補充する
+        if (matchedGreetings.length <= 3) {
+          generateGreetingPoolInBackground();
+        }
+        
         setIsLoading(false);
         return;
       }
       
-      // 万が一マッチするものがなくても、時間帯を無視した挨拶を出さないよう安全策を設定
       let defaultGreeting = "やあ！調子はどう？";
       if (tag.includes('morning')) defaultGreeting = "おはよう！よく眠れた？";
       else if (tag.includes('evening') || tag === 'night' || tag === 'friday_night') defaultGreeting = "こんばんは！今日もお疲れ様。";
@@ -153,7 +158,7 @@ export const useCompanionChat = (sessionId: string | null) => {
   useEffect(() => {
     if (!sessionId) { 
       refreshSessions(); 
-      setMessages([]); // 画面をクリアにして新規の準備
+      setMessages([]); 
       generateDynamicGreeting(); 
       return; 
     }
