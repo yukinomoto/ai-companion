@@ -83,9 +83,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
       isManualStopRef.current = false;
       wasVoiceInputRef.current = true;
       try {
-        // 💡 許可ダイアログ再発の原因になっていた abort() と setTimeout を撤去し、直接起動
-        recognitionRef.current.start();
-        setIsRecording(true);
+        // 💡 マイクの許可が何度も聞かれるのを防ぐため、リセット処理を復活
+        recognitionRef.current.abort();
+        setTimeout(() => {
+          recognitionRef.current.start();
+          setIsRecording(true);
+        }, 50);
       } catch (e) {
         console.error("録音開始失敗:", e);
       }
@@ -108,10 +111,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, 
         </svg>
       </button>
 
+      {/* 💡 fontSize を 15px から 16px に変更し、iOS Safariの勝手な画面拡大・スクロールを完全に封殺 */}
       <input 
         type="text" className="selectable-text" value={text} onChange={(e) => setText(e.target.value)} 
         placeholder={isRecording ? "聞き取り中..." : "話しかけてみる..."} disabled={isLoading} 
-        style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: '15px', color: '#1e293b', fontWeight: 500, textAlign: 'center' }} 
+        style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: '16px', color: '#1e293b', fontWeight: 500, textAlign: 'center' }} 
       />
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

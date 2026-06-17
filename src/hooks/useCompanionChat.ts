@@ -90,7 +90,6 @@ export const useCompanionChat = (sessionId: string | null) => {
     setSessions(list);
   };
 
-  // 💡 プロンプトを変えずに、引数で指定された時間帯のストックを補充するよう改修
   const generateGreetingPoolInBackground = async (targetTag?: string) => {
     try {
       const tag = targetTag || getTimeContext().tag;
@@ -114,13 +113,11 @@ export const useCompanionChat = (sessionId: string | null) => {
     }
   };
 
-  // 💡 全時間帯のストックをチェックし、足りないものがあれば裏で補充する関数
   const checkAndReplenishAllPools = (currentPool: any[]) => {
     const timeTags = ['morning', 'afternoon', 'evening', 'night'];
     timeTags.forEach(tag => {
       const count = currentPool.filter((p: any) => p.context_type === tag).length;
       if (count <= 3) {
-        // 残り3個以下なら、その時間帯を指定して生成を回す（プロンプトは変更なし）
         generateGreetingPoolInBackground(tag);
       }
     });
@@ -132,7 +129,6 @@ export const useCompanionChat = (sessionId: string | null) => {
       const pool = await dbService.getGreetingPool();
       const { tag } = getTimeContext();
 
-      // 裏で全時間帯の残量をチェック＆自動補充
       checkAndReplenishAllPools(pool);
 
       const matchedGreetings = pool.filter(p => p.context_type === tag || p.context_type === 'neutral');
@@ -175,9 +171,9 @@ export const useCompanionChat = (sessionId: string | null) => {
     }
     const loadHistory = async () => {
       const history = await dbService.getChatHistory(sessionId);
-      if (history.length === 0) {
-        generateDynamicGreeting();
-      } else {
+      // 💡 修正箇所：新規セッション（DBにまだ書き込まれておらず履歴が0件）の場合、
+      // 今まさにメッセージを送信・表示している最中なので、空配列で上書きしないように保護する
+      if (history.length > 0) {
         setMessages(history);
       }
     };
@@ -224,14 +220,15 @@ export const useCompanionChat = (sessionId: string | null) => {
             const quickEmotion = (api1Result.emotion as any) || 'neutral';
             const isCompleted = api1Result.is_completed;
 
-            setTimeout(() => {
+            setTimeout(async () => {
               setMessages((prev) => prev.map((msg) => msg.id === userMessageId ? { ...msg, text: api1Result.user_display_text } : msg));
               setMessages((prev) => [...prev, { id: api1MessageId, sender: 'ai', text: api1Result.quick_response, isQuickResponse: !isCompleted, emotion: quickEmotion }]);
              
               if (isVoiceInput) playVoiceWrapper(api1Result.quick_response);
 
-              dbService.saveMessage(userMessageId, activeSessionId, 'user', api1Result.user_display_text).catch(console.error);
-              dbService.saveMessage(api1MessageId, activeSessionId, 'ai', api1Result.quick_response).catch(console.error);
+              // 💡 修正箇所：awaitをつけて直列化し、必ずユーザーの発言 → AIの発言の順番で保存されるように固定
+              await dbService.saveMessage(userMessageId, activeSessionId, 'user', api1Result.user_display_text);
+              await dbService.saveMessage(api1MessageId, activeSessionId, 'ai', api1Result.quick_response);
 
               if (isCompleted) {
                 setIsLoading(false);
@@ -242,13 +239,14 @@ export const useCompanionChat = (sessionId: string | null) => {
           (api3Result, isCompleted) => {
             if (!isCompleted) {
               const delay = Math.max(0, 1500 - (Date.now() - startTime));
-              setTimeout(() => {
+              setTimeout(async () => {
                 setMessages((prev) => prev.map((msg) => msg.id === api1MessageId ? { ...msg, isQuickResponse: false } : msg));
                 setMessages((prev) => [...prev, { id: api2MessageId, sender: 'ai', text: api3Result.final_answer, isQuickResponse: false, emotion: api3Result.emotion || 'neutral' }]);
                 
                 if (isVoiceInput) playVoiceWrapper(api3Result.final_answer);
   
-                dbService.saveMessage(api2MessageId, activeSessionId, 'ai', api3Result.final_answer).catch(console.error);
+                // 💡 ここもawaitをつけて順番の競合を完全に防ぐ
+                await dbService.saveMessage(api2MessageId, activeSessionId, 'ai', api3Result.final_answer);
                 
                 setIsLoading(false);
               }, delay);
