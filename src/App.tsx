@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
   Menu, Settings2, X, Clock, Plus, Mic, Send, Activity, Square
 } from 'lucide-react';
