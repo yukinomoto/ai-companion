@@ -53,13 +53,14 @@ export default function App() {
       };
 
       rec.onresult = (event: any) => {
-        // 喋った内容をリアルタイムでテキストボックスに反映させる
-        let currentTranscript = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          currentTranscript += event.results[i][0].transcript;
+        let fullTranscript = '';
+        // 0からループを回し、今回の録音セッションの最新の認識結果をすべて結合する
+        for (let i = 0; i < event.results.length; ++i) {
+          fullTranscript += event.results[i][0].transcript;
         }
-        if (currentTranscript) {
-          setInputText((prev) => prev + currentTranscript);
+        // 過去のテキストに追加するのではなく、最新の完全な結果で「上書き」する
+        if (fullTranscript) {
+          setInputText(fullTranscript); 
         }
       };
 
