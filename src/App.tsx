@@ -1,6 +1,7 @@
+// src/App.tsx
 import { useState, useEffect, useRef } from 'react';
 import { 
-  Menu, Settings2, X, Clock, Plus, Mic, Send, Activity, Square
+  Menu, Settings2, X, Clock, Plus, Mic, Send, Activity, Square, Volume2, Loader2 
 } from 'lucide-react';
 import { useLoggerStore, initLoggerObserver } from './store/useLoggerStore';
 import { DebugPanel } from './components/DebugPanel';
@@ -19,6 +20,7 @@ export default function App() {
   const [inputText, setInputText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [showDiagnostic, setShowDiagnostic] = useState(false);
+  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   
   const logEvent = useLoggerStore((state: any) => state.logEvent);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -37,7 +39,7 @@ export default function App() {
       const rec = new SpeechRecognition();
       rec.lang = 'ja-JP';
       
-      // 💡 継続して聞き取り、途中経過も取得する本番仕様
+      // 継続して聞き取り、途中経過も取得する
       rec.continuous = true;
       rec.interimResults = true;
 
@@ -81,6 +83,7 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // 音声出力処理（AIの自動応答用）
   const speakText = async (text: string) => {
     if (!gcloudApiKey) {
       logEvent('audio_play_error', { error_message: 'GCP API Key is missing' });
@@ -96,6 +99,7 @@ export default function App() {
     }
   };
 
+  // メッセージ送信処理
   const handleSend = (textToSend?: string) => {
     const targetText = textToSend || inputText;
     if (!targetText.trim()) return;
@@ -112,6 +116,7 @@ export default function App() {
     
     logEvent('diagnostic_run', { payload: { action: 'text_sent', textLength: targetText.length } });
 
+    // AIの応答をシミュレート
     setTimeout(() => {
       const aiReplyText = `「${targetText}」ですね。手動送信からの音声出力をテストしています。`;
       const aiMessage: Message = {
@@ -126,7 +131,7 @@ export default function App() {
     }, 1000);
   };
 
-  // 💡 マイクボタンの動作を「手動停止＆送信」に修正
+  // マイクボタンのクリック処理（手動停止＆送信）
   const handleMicClick = () => {
     audioService.unlock();
 
@@ -144,7 +149,7 @@ export default function App() {
       
       // テキストが入っていれば送信
       if (inputText.trim()) {
-        handleSend();
+        handleSend(inputText);
       }
     } else {
       // 🎤 録音を開始する
@@ -159,9 +164,34 @@ export default function App() {
     }
   };
 
+  // 過去のメッセージを手動で再生する処理
+  const handleManualPlay = async (messageId: string, text: string) => {
+    if (playingMessageId === messageId) {
+      audioService.stop();
+      setPlayingMessageId(null);
+      return;
+    }
+
+    // 他の音声が鳴っていれば止め、iOS対策でUnlockする
+    audioService.stop();
+    audioService.unlock();
+    
+    setPlayingMessageId(messageId);
+    logEvent('tts_request_sent', { payload: { reason: 'manual_play', messageId } });
+
+    try {
+      await audioService.play(text, 'ja-JP-Neural2-B', gcloudApiKey);
+    } catch (error: any) {
+      logEvent('audio_play_error', { error_message: 'Manual Play Error: ' + error });
+    } finally {
+      setPlayingMessageId((prev) => (prev === messageId ? null : prev));
+    }
+  };
+
   return (
     <div className="flex h-screen w-full bg-slate-50 font-sans text-slate-800 overflow-hidden relative">
       
+      {/* ── サイドメニュー (Overlay) ── */}
       {isSidebarOpen && (
         <div className="absolute inset-0 bg-slate-900/20 z-40 transition-opacity" onClick={() => setSidebarOpen(false)} />
       )}
@@ -206,6 +236,7 @@ export default function App() {
         </div>
       </div>
 
+      {/* ── メイン画面 ── */}
       <div className="flex-1 flex flex-col h-full bg-slate-50">
         <header className="flex items-center justify-between px-4 py-3 bg-white border-b border-slate-100 z-10 shrink-0">
           <button onClick={() => setSidebarOpen(true)} className="p-2 text-slate-500 hover:text-slate-800 transition-colors">
@@ -234,9 +265,37 @@ export default function App() {
                   }`}>
                     {msg.text}
                   </div>
-                  <span className={`text-[10px] text-slate-400 mt-1 ${msg.sender === 'user' ? 'mr-1' : 'ml-1'}`}>
-                    {msg.time}
-                  </span>
+                  
+                  {/* 時間と再生ボタン */}
+                  <div className={`flex items-center mt-1 ${msg.sender === 'user' ? 'mr-1 flex-row-reverse' : 'ml-1'}`}>
+                    <span className="text-[10px] text-slate-400">
+                      {msg.time}
+                    </span>
+                    
+                    {msg.sender === 'ai' && (
+                      <button
+                        onClick={() => handleManualPlay(msg.id, msg.text)}
+                        className={`flex items-center gap-1 ml-3 px-2 py-0.5 rounded-full transition-all ${
+                          playingMessageId === msg.id 
+                            ? 'bg-blue-50 text-blue-500' 
+                            : 'text-slate-400 hover:text-blue-400 hover:bg-slate-100'
+                        }`}
+                      >
+                        {playingMessageId === msg.id ? (
+                          <>
+                            <Loader2 size={12} className="animate-spin" />
+                            <span className="text-[10px] font-medium">再生中</span>
+                          </>
+                        ) : (
+                          <>
+                            <Volume2 size={12} />
+                            <span className="text-[10px] font-medium">音声を再生</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+
                 </div>
               ))}
               <div ref={chatEndRef} />
