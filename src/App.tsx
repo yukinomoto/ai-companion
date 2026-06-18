@@ -5,7 +5,7 @@ import {
 import { useLoggerStore, initLoggerObserver } from './store/useLoggerStore';
 import { DebugPanel } from './components/DebugPanel';
 import { AudioDiagnostic } from './components/AudioDiagnostic';
-import { audioService } from './services/audioService'; // 💡 既存のサービスをインポート
+import { audioService } from './services/audioService';
 
 interface Message {
   id: string;
@@ -23,8 +23,10 @@ export default function App() {
   const logEvent = useLoggerStore((state: any) => state.logEvent);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+  
+  // 意図しない自動停止を防ぐためのフラグ
+  const isManualStopRef = useRef(false);
 
-  // 環境変数からGCPのAPIキーを取得
   const gcloudApiKey = import.meta.env.VITE_GOOGLE_CLOUD_API_KEY;
 
   useEffect(() => {
@@ -34,23 +36,31 @@ export default function App() {
     if (SpeechRecognition) {
       const rec = new SpeechRecognition();
       rec.lang = 'ja-JP';
-      rec.interimResults = false;
-      rec.continuous = false;
+      
+      // 💡 継続して聞き取り、途中経過も取得する本番仕様
+      rec.continuous = true;
+      rec.interimResults = true;
 
       rec.onstart = () => {
         setIsRecording(true);
+        isManualStopRef.current = false;
         logEvent('recording_started');
       };
 
       rec.onend = () => {
         setIsRecording(false);
-        logEvent('recording_stopped');
+        logEvent('recording_stopped', { payload: { reason: isManualStopRef.current ? 'manual' : 'auto_timeout' } });
       };
 
       rec.onresult = (event: any) => {
-        const resultText = event.results[0][0].transcript;
-        logEvent('stt_response_received', { payload: { text: resultText } });
-        handleSend(resultText);
+        // 喋った内容をリアルタイムでテキストボックスに反映させる
+        let currentTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          currentTranscript += event.results[i][0].transcript;
+        }
+        if (currentTranscript) {
+          setInputText((prev) => prev + currentTranscript);
+        }
       };
 
       rec.onerror = (event: any) => {
@@ -70,16 +80,13 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // 💡 あなたの audioService を使った GCP 音声再生処理
   const speakText = async (text: string) => {
     if (!gcloudApiKey) {
       logEvent('audio_play_error', { error_message: 'GCP API Key is missing' });
       return;
     }
-    
     try {
       logEvent('tts_request_sent');
-      // audioService.play は再生終了時に resolve される仕様
       logEvent('audio_play_start');
       await audioService.play(text, 'ja-JP-Neural2-B', gcloudApiKey); 
       logEvent('audio_play_end');
@@ -100,11 +107,12 @@ export default function App() {
     };
     
     setMessages(prev => [...prev, userMessage]);
-    if (!textToSend) setInputText('');
+    setInputText(''); // 送信したらクリア
+    
     logEvent('diagnostic_run', { payload: { action: 'text_sent', textLength: targetText.length } });
 
     setTimeout(() => {
-      const aiReplyText = `「${targetText}」についてですね。音声機能のテストとしてシステムが自動応答を生成しました。`;
+      const aiReplyText = `「${targetText}」ですね。手動送信からの音声出力をテストしています。`;
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
         text: aiReplyText,
@@ -117,8 +125,8 @@ export default function App() {
     }, 1000);
   };
 
+  // 💡 マイクボタンの動作を「手動停止＆送信」に修正
   const handleMicClick = () => {
-    // 💡 録音開始前にオーディオをUnlockする（iOS対策）
     audioService.unlock();
 
     if (!recognitionRef.current) {
@@ -127,8 +135,19 @@ export default function App() {
     }
 
     if (isRecording) {
+      // 🛑 手動で録音を停止し、溜まったテキストを送信する
+      isManualStopRef.current = true;
       recognitionRef.current.stop();
+      
+      logEvent('stt_response_received', { payload: { text: inputText } });
+      
+      // テキストが入っていれば送信
+      if (inputText.trim()) {
+        handleSend();
+      }
     } else {
+      // 🎤 録音を開始する
+      setInputText(''); // 新しく話し始める時は空にする
       logEvent('mic_permission_requested');
       try {
         recognitionRef.current.start();
@@ -141,7 +160,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-full bg-slate-50 font-sans text-slate-800 overflow-hidden relative">
-      {/* 以前と同じUI描画部分は省略（変更なし） */}
+      
       {isSidebarOpen && (
         <div className="absolute inset-0 bg-slate-900/20 z-40 transition-opacity" onClick={() => setSidebarOpen(false)} />
       )}
@@ -230,7 +249,7 @@ export default function App() {
               <div className="w-full relative flex items-center">
                 <input 
                   type="text"
-                  placeholder="メッセージを入力..."
+                  placeholder={isRecording ? "聞き取り中..." : "メッセージを入力..."}
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleSend()}
@@ -255,7 +274,7 @@ export default function App() {
                     {isRecording ? <Square size={24} strokeWidth={2} /> : <Mic size={28} strokeWidth={1.5} />}
                   </button>
                   <span className={`text-[10px] font-medium tracking-wide ${isRecording ? 'text-red-500' : 'text-slate-400'}`}>
-                    {isRecording ? '録音中...' : 'タップして話す'}
+                    {isRecording ? '録音を終了して送信' : 'タップして話す'}
                   </span>
                 </div>
                 <button className="p-3 text-slate-400 hover:text-blue-500 transition-colors">
