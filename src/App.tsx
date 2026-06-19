@@ -31,6 +31,23 @@ export default function App() {
 
   const gcloudApiKey = import.meta.env.VITE_GOOGLE_CLOUD_API_KEY;
 
+  // 💡 追加：Safariが現在認識しているオーディオ出力先を監視する関数
+  const checkAudioRouting = async (timing: string) => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioOutputs = devices.filter(d => d.kind === 'audiooutput');
+      
+      logEvent('diagnostic_run', { 
+        payload: { 
+          routing_timing: timing, 
+          outputs: audioOutputs.map(d => d.label || d.deviceId || 'unknown') 
+        } 
+      });
+    } catch (e: any) {
+      logEvent('diagnostic_run', { payload: { routing_timing: timing, error: e.message } });
+    }
+  };
+
   useEffect(() => {
     initLoggerObserver();
 
@@ -47,20 +64,20 @@ export default function App() {
         setIsRecording(true);
         isManualStopRef.current = false;
         logEvent('recording_started');
+        checkAudioRouting('after_mic_start'); // 💡 録音開始直後の出力先をチェック
       };
 
       rec.onend = () => {
         setIsRecording(false);
         logEvent('recording_stopped', { payload: { reason: isManualStopRef.current ? 'manual' : 'auto_timeout' } });
+        checkAudioRouting('after_mic_stop'); // 💡 録音終了直後の出力先をチェック
       };
 
       rec.onresult = (event: any) => {
         let fullTranscript = '';
-        // 0からループを回し、今回の録音セッションの最新の認識結果をすべて結合する
         for (let i = 0; i < event.results.length; ++i) {
           fullTranscript += event.results[i][0].transcript;
         }
-        // 過去のテキストに追加するのではなく、最新の完全な結果で「上書き」する
         if (fullTranscript) {
           setInputText(fullTranscript); 
         }
@@ -92,6 +109,7 @@ export default function App() {
     try {
       logEvent('tts_request_sent');
       logEvent('audio_play_start');
+      await checkAudioRouting('before_tts_play'); // 💡 音声再生直前の出力先をチェック
       await audioService.play(text, 'ja-JP-Neural2-B', gcloudApiKey); 
       logEvent('audio_play_end');
     } catch (error: any) {
@@ -112,11 +130,10 @@ export default function App() {
     };
     
     setMessages(prev => [...prev, userMessage]);
-    setInputText(''); // 送信したらクリア
+    setInputText(''); 
     
     logEvent('diagnostic_run', { payload: { action: 'text_sent', textLength: targetText.length } });
 
-    // AIの応答をシミュレート
     setTimeout(() => {
       const aiReplyText = `「${targetText}」ですね。手動送信からの音声出力をテストしています。`;
       const aiMessage: Message = {
@@ -141,19 +158,16 @@ export default function App() {
     }
 
     if (isRecording) {
-      // 🛑 手動で録音を停止し、溜まったテキストを送信する
       isManualStopRef.current = true;
       recognitionRef.current.stop();
       
       logEvent('stt_response_received', { payload: { text: inputText } });
       
-      // テキストが入っていれば送信
       if (inputText.trim()) {
         handleSend(inputText);
       }
     } else {
-      // 🎤 録音を開始する
-      setInputText(''); // 新しく話し始める時は空にする
+      setInputText('');
       logEvent('mic_permission_requested');
       try {
         recognitionRef.current.start();
@@ -172,7 +186,6 @@ export default function App() {
       return;
     }
 
-    // 他の音声が鳴っていれば止め、iOS対策でUnlockする
     audioService.stop();
     audioService.unlock();
     
@@ -180,6 +193,7 @@ export default function App() {
     logEvent('tts_request_sent', { payload: { reason: 'manual_play', messageId } });
 
     try {
+      await checkAudioRouting('before_manual_tts_play'); // 💡 手動再生直前の出力先をチェック
       await audioService.play(text, 'ja-JP-Neural2-B', gcloudApiKey);
     } catch (error: any) {
       logEvent('audio_play_error', { error_message: 'Manual Play Error: ' + error });
