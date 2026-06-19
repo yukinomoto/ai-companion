@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { supabase } from '../supabaseClient';
+import { supabase } from '../lib/supabase';
 
 export type LogEvent = 
   | 'app_start' | 'mic_permission_requested' | 'mic_permission_granted' 

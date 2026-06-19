@@ -1,7 +1,7 @@
 // src/App.tsx
 import { useState, useEffect, useRef } from 'react';
 import { 
-  Menu, Settings2, X, Mic, Send, Activity, Square, Volume2, Loader2 
+  Menu, Settings2, X, Mic, Send, Activity, Square, Volume2, Loader2, PlusCircle
 } from 'lucide-react';
 import { useLoggerStore, initLoggerObserver } from './store/useLoggerStore';
 import { DebugPanel } from './components/DebugPanel';
@@ -9,6 +9,8 @@ import { AudioDiagnostic } from './components/AudioDiagnostic';
 import { audioService } from './services/audioService';
 import { sttService } from './services/sttService';
 import { useAudioPipeline } from './hooks/useAudioPipeline';
+import { supabase } from './lib/supabase';
+import { chatService } from './services/chatService';
 
 interface Message {
   id: string;
@@ -23,8 +25,9 @@ export default function App() {
   const [showDiagnostic, setShowDiagnostic] = useState(false);
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   
-  // 💡 追加：文字起こし中（通信中）のローディング状態
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
+  const [currentSessionId, setCurrentSessionId] = useState<string>(crypto.randomUUID());
   
   const logEvent = useLoggerStore((state: any) => state.logEvent);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -32,19 +35,72 @@ export default function App() {
   const gcloudApiKey = import.meta.env.VITE_GOOGLE_CLOUD_API_KEY;
   const groqApiKey = import.meta.env.VITE_GROQ_API_KEY;
 
-  const [messages, setMessages] = useState<Message[]>([
-    { id: '1', text: 'おはようございます、ユウキさん。\n新しい音声認識システムの準備が整いました。', sender: 'ai', time: '09:00' },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
 
+  // ── 1. 起動時の初期化 ──
   useEffect(() => {
     initLoggerObserver();
+    loadChatHistory(); // 過去の最新セッションを自動ロード
   }, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, isThinking]);
 
-  // ── 1. メッセージ送信とAI応答 ──
+  // ── 2. Supabaseから直近のセッション履歴を読み込む ──
+  const loadChatHistory = async () => {
+    try {
+      // 最後に会話したレコードから session_id を1件だけ特定する
+      const { data: latestMsg } = await supabase
+        .from('chat_messages')
+        .select('session_id')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      // 過去に一度も会話がなければ現在のランダムIDのまま終了
+      if (!latestMsg) return;
+
+      const targetSessionId = latestMsg.session_id;
+      setCurrentSessionId(targetSessionId);
+
+      // 特定したセッションの全履歴を時系列で取得
+      const { data, error } = await supabase
+        .from('chat_messages')
+        .select('*')
+        .eq('session_id', targetSessionId)
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+
+      if (data) {
+        const formattedHistory: Message[] = data.map((msg) => ({
+          id: msg.id,
+          text: msg.text,
+          sender: msg.sender as 'user' | 'ai',
+          time: new Date(msg.created_at).toLocaleTimeString('ja-JP', { 
+            hour: '2-digit', 
+            minute: '2-digit' 
+          })
+        }));
+        setMessages(formattedHistory);
+      }
+    } catch (error) {
+      console.error('履歴読み込み失敗:', error);
+    }
+  };
+
+  // ── 3. 新規チャットを開始する（安全にセッションを切り替え） ──
+  const handleNewChat = () => {
+    logEvent('diagnostic_run', { payload: { action: 'start_new_session' } });
+    
+    // 過去データを破壊せず、新しいUUIDに切り替えて画面をクリア
+    setCurrentSessionId(crypto.randomUUID());
+    setMessages([]);
+    setSidebarOpen(false);
+  };
+
+  // ── 4. メッセージ送信とAI応答 ──
   const speakText = async (text: string) => {
     if (!gcloudApiKey) return;
     try {
@@ -56,7 +112,7 @@ export default function App() {
     }
   };
 
-  const handleSend = (textToSend?: string) => {
+  const handleSend = async (textToSend?: string) => {
     const targetText = textToSend || inputText;
     if (!targetText.trim()) return;
     
@@ -69,73 +125,65 @@ export default function App() {
     
     setMessages(prev => [...prev, userMessage]);
     setInputText(''); 
+    setIsThinking(true);
     
     logEvent('diagnostic_run', { payload: { action: 'text_sent', textLength: targetText.length } });
 
-    // AIの応答をシミュレート
-    setTimeout(() => {
-      const aiReplyText = `「${targetText}」ですね。Groq APIによるWhisper文字起こしに成功しました。`;
+    try {
+      // 本物の脳（Gemini）へセッションIDを伴って送信
+      const aiReplyText = await chatService.sendMessage(targetText, currentSessionId);
+
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
         text: aiReplyText,
         sender: 'ai',
         time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
       };
+      
       setMessages(prev => [...prev, aiMessage]);
       speakText(aiReplyText);
-    }, 1000);
+
+    } catch (error) {
+      console.error('AI応答エラー:', error);
+    } finally {
+      setIsThinking(false);
+    }
   };
 
-  // ── 2. 音声録音とテキスト化 (Whisper) のパイプライン ──
+  // ── 5. 音声録音とテキスト化パイプライン ──
   const handleAudioStop = async (audioBlob: Blob) => {
     logEvent('recording_stopped', { payload: { reason: 'manual' } });
-    
-    if (!groqApiKey) {
-      alert("Groq API Keyが設定されていません。");
-      return;
-    }
+    if (!groqApiKey) return;
 
-    // 文字起こし中のUI表示
     setIsTranscribing(true);
-    setInputText('音声をテキストに変換中...');
-
     try {
-      // Groq (Whisper) へBlobを投げてテキスト化
       const transcribedText = await sttService.transcribe(audioBlob, groqApiKey);
       logEvent('stt_response_received', { payload: { text: transcribedText } });
-      
-      // テキスト入力欄をクリアし、そのまま送信処理へ
-      setInputText('');
       if (transcribedText.trim()) {
         handleSend(transcribedText);
       }
     } catch (error: any) {
-      setInputText('');
       alert("文字起こしに失敗しました: " + error.message);
-      logEvent('audio_play_error', { error_message: 'Groq STT Error: ' + error.message });
     } finally {
       setIsTranscribing(false);
     }
   };
 
-  // カスタムフックから最強のマイクを呼び出す
   const { startPipeline, stopPipeline, isRecording, isSpeaking } = useAudioPipeline({
     onStop: handleAudioStop
   });
 
   const handleMicClick = () => {
-    audioService.unlock(); // iOSのAudioContext制約を解除
-
+    audioService.unlock(); 
     if (isRecording) {
-      stopPipeline(); // 録音を終了すると、自動的に handleAudioStop が呼ばれる
+      stopPipeline(); 
     } else {
-      logEvent('mic_permission_requested');
       startPipeline();
       logEvent('recording_started');
     }
   };
 
-  // ── 3. 手動再生機能 ──
+  // ── 6. 手動音声再生 ──
   const handleManualPlay = async (messageId: string, text: string) => {
     if (playingMessageId === messageId) {
       audioService.stop();
@@ -161,151 +209,195 @@ export default function App() {
       )}
       
       <div className={`absolute top-0 left-0 h-full w-80 bg-white shadow-2xl z-50 transform transition-transform duration-300 ease-in-out flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="flex items-center p-4 border-b border-slate-100">
-          <button onClick={() => setSidebarOpen(false)} className="p-2 text-slate-400 hover:text-slate-600">
-            <X size={24} strokeWidth={1.5} />
+        <div className="flex items-center justify-between p-4 border-b border-slate-100">
+          <span className="font-bold text-slate-700 tracking-tight">AI PARTNER</span>
+          <button onClick={() => setSidebarOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 transition-colors">
+            <X size={20} strokeWidth={2} />
           </button>
-          <span className="ml-4 font-medium text-slate-700">メニュー</span>
         </div>
 
-        <div className="flex-1 overflow-y-auto py-4 px-3 space-y-6">
+        <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8">
+          {/* 💡 セッション切り替え用の新規チャットボタン */}
           <div>
-            <h3 className="text-xs font-semibold text-slate-400 mb-3 px-3">設定とデバッグ</h3>
-            <ul className="space-y-1">
+            <button 
+              onClick={handleNewChat}
+              className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-slate-900 text-white rounded-xl hover:bg-slate-800 transition-all shadow-md active:scale-95 mb-8"
+            >
+              <PlusCircle size={18} />
+              <span className="text-sm font-semibold">新規チャットを始める</span>
+            </button>
+          </div>
+
+          <div>
+            <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-4 px-1">メンテナンス</h3>
+            <ul className="space-y-2">
               <li>
                 <button 
                   onClick={() => { setSidebarOpen(false); setShowDiagnostic(!showDiagnostic); }}
-                  className="w-full flex items-center px-3 py-2 text-sm text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors font-medium"
+                  className="w-full flex items-center px-4 py-3 text-sm text-slate-600 hover:bg-slate-50 rounded-xl transition-colors group"
                 >
-                  <span className="text-blue-500 mr-3"><Activity size={16} /></span>
-                  <span className="truncate">音声診断モードを開く</span>
+                  <Activity size={18} className="text-slate-400 group-hover:text-blue-500 mr-3" />
+                  <span>音声診断モード</span>
                 </button>
               </li>
             </ul>
           </div>
         </div>
+        
+        <div className="p-4 border-t border-slate-50">
+          <p className="text-[10px] text-center text-slate-300">© 2026 AI Partner Engine v2.5</p>
+        </div>
       </div>
 
       {/* ── メイン画面 ── */}
-      <div className="flex-1 flex flex-col h-full bg-slate-50">
-        <header className="flex items-center justify-between px-4 py-3 bg-white border-b border-slate-100 z-10 shrink-0">
-          <button onClick={() => setSidebarOpen(true)} className="p-2 text-slate-500 hover:text-slate-800 transition-colors">
-            <Menu size={24} strokeWidth={1.5} />
+      <div className="flex-1 flex flex-col h-full bg-slate-50 max-w-4xl mx-auto w-full shadow-inner">
+        <header className="flex items-center justify-between px-6 py-4 bg-white/80 backdrop-blur-md border-b border-slate-100 z-10 shrink-0">
+          <button onClick={() => setSidebarOpen(true)} className="p-2 text-slate-500 hover:text-slate-800 transition-colors bg-slate-50 rounded-lg">
+            <Menu size={22} strokeWidth={1.5} />
           </button>
-          <h1 className="text-base font-medium text-slate-800 tracking-wide">AIパートナー</h1>
-          <button className="p-2 text-slate-500 hover:text-slate-800 transition-colors">
-            <Settings2 size={24} strokeWidth={1.5} />
+          <div className="flex flex-col items-center">
+            <h1 className="text-sm font-bold text-slate-800 tracking-tighter">PARTNER AI</h1>
+            <div className="flex items-center gap-1">
+              <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+              <span className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">Connected</span>
+            </div>
+          </div>
+          <button className="p-2 text-slate-500 hover:text-slate-800 transition-colors bg-slate-50 rounded-lg">
+            <Settings2 size={22} strokeWidth={1.5} />
           </button>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-4 space-y-6">
+        <main className="flex-1 overflow-y-auto p-6 space-y-8 scroll-smooth">
           {showDiagnostic ? (
-            <div className="max-w-2xl mx-auto mt-4">
-              <button onClick={() => setShowDiagnostic(false)} className="text-sm text-slate-500 hover:text-slate-800 mb-4 flex items-center">
-                <X size={16} className="mr-1" /> 診断モードを閉じる
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
+              <button onClick={() => setShowDiagnostic(false)} className="text-xs font-bold text-blue-500 hover:text-blue-700 mb-6 flex items-center bg-blue-50 px-3 py-2 rounded-lg">
+                <X size={14} className="mr-1" /> 診断モードを閉じる
               </button>
               <AudioDiagnostic />
             </div>
           ) : (
             <>
+              {messages.length === 0 && !isThinking && (
+                <div className="flex flex-col items-center justify-center h-full opacity-30 select-none">
+                  <div className="w-16 h-16 bg-slate-200 rounded-full flex items-center justify-center mb-4">
+                    <Mic size={32} className="text-slate-400" />
+                  </div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Waiting for your voice...</p>
+                </div>
+              )}
               {messages.map((msg) => (
-                <div key={msg.id} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'} w-full`}>
-                  <div className={`max-w-[85%] p-4 rounded-2xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap ${
-                    msg.sender === 'user' ? 'bg-blue-500 text-white rounded-tr-sm' : 'bg-white border border-slate-100 text-slate-700 rounded-tl-sm'
+                <div key={msg.id} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'} w-full animate-in fade-in duration-500`}>
+                  <div className={`max-w-[88%] p-4 rounded-3xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap ${
+                    msg.sender === 'user' 
+                      ? 'bg-blue-600 text-white rounded-tr-none' 
+                      : 'bg-white border border-slate-100 text-slate-700 rounded-tl-none'
                   }`}>
                     {msg.text}
                   </div>
                   
-                  <div className={`flex items-center mt-1 ${msg.sender === 'user' ? 'mr-1 flex-row-reverse' : 'ml-1'}`}>
-                    <span className="text-[10px] text-slate-400">
+                  <div className={`flex items-center mt-2 ${msg.sender === 'user' ? 'mr-1 flex-row-reverse' : 'ml-1'}`}>
+                    <span className="text-[10px] font-bold text-slate-300 tracking-tighter">
                       {msg.time}
                     </span>
                     {msg.sender === 'ai' && (
                       <button
                         onClick={() => handleManualPlay(msg.id, msg.text)}
-                        className={`flex items-center gap-1 ml-3 px-2 py-0.5 rounded-full transition-all ${
+                        className={`flex items-center gap-1.5 ml-4 px-3 py-1 rounded-full transition-all border ${
                           playingMessageId === msg.id 
-                            ? 'bg-blue-50 text-blue-500' 
-                            : 'text-slate-400 hover:text-blue-400 hover:bg-slate-100'
+                            ? 'bg-blue-50 border-blue-100 text-blue-500' 
+                            : 'bg-white border-slate-100 text-slate-400 hover:text-blue-500 hover:border-blue-100'
                         }`}
                       >
                         {playingMessageId === msg.id ? (
-                          <>
-                            <Loader2 size={12} className="animate-spin" />
-                            <span className="text-[10px] font-medium">再生中</span>
-                          </>
+                          <Loader2 size={12} className="animate-spin" />
                         ) : (
-                          <>
-                            <Volume2 size={12} />
-                            <span className="text-[10px] font-medium">音声を再生</span>
-                          </>
+                          <Volume2 size={12} />
                         )}
+                        <span className="text-[9px] font-bold uppercase tracking-tighter">
+                          {playingMessageId === msg.id ? 'Playing' : 'Listen'}
+                        </span>
                       </button>
                     )}
                   </div>
                 </div>
               ))}
-              <div ref={chatEndRef} />
+              
+              {isThinking && (
+                <div className="flex flex-col items-start w-full mt-2 animate-pulse">
+                  <div className="bg-white border border-slate-50 text-slate-300 p-4 rounded-3xl rounded-tl-none shadow-sm flex items-center space-x-3">
+                    <Loader2 className="animate-spin" size={16} />
+                    <span className="text-xs font-bold uppercase tracking-widest">Processing...</span>
+                  </div>
+                </div>
+              )}
+              
+              <div ref={chatEndRef} className="h-4" />
             </>
           )}
         </main>
 
         {!showDiagnostic && (
-          <div className="w-full bg-white border-t border-slate-100 p-4 shrink-0">
-            <div className="max-w-3xl mx-auto flex flex-col items-center gap-4">
-              <div className="w-full relative flex items-center">
+          <div className="w-full bg-white/80 backdrop-blur-lg border-t border-slate-100 p-6 shrink-0 shadow-2xl">
+            <div className="max-w-2xl mx-auto flex flex-col items-center gap-6">
+              <div className="w-full relative flex items-center group">
                 <input 
                   type="text"
                   placeholder={
-                    isTranscribing ? "音声をテキストに変換中..." :
-                    isRecording ? "マイク録音中..." : "メッセージを入力..."
+                    isTranscribing ? "Transcribing voice..." :
+                    isThinking ? "Thinking..." :
+                    isRecording ? "Listening..." : "Message AI Partner..."
                   }
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && !isRecording && !isTranscribing && handleSend()}
-                  disabled={isRecording || isTranscribing}
-                  className={`w-full bg-slate-50 border rounded-full py-3 pl-5 pr-12 text-sm text-slate-700 focus:outline-none transition-all ${
-                    isTranscribing ? 'border-blue-300 bg-blue-50/50 animate-pulse text-blue-500' : 'border-slate-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400'
+                  onKeyDown={(e) => e.key === 'Enter' && !isRecording && !isTranscribing && !isThinking && handleSend()}
+                  disabled={isRecording || isTranscribing || isThinking}
+                  className={`w-full bg-slate-50 border rounded-2xl py-4 pl-6 pr-14 text-sm text-slate-700 focus:outline-none transition-all ${
+                    isTranscribing || isThinking 
+                      ? 'border-blue-200 bg-blue-50/30 text-blue-400 italic' 
+                      : 'border-slate-100 focus:border-blue-300 focus:ring-4 focus:ring-blue-500/5'
                   }`}
                 />
                 <button 
                   onClick={() => handleSend()} 
-                  disabled={isRecording || isTranscribing}
-                  className={`absolute right-2 p-2 text-white rounded-full transition-colors ${
-                    isRecording || isTranscribing ? 'bg-slate-300' : 'bg-blue-500 hover:bg-blue-600'
+                  disabled={isRecording || isTranscribing || isThinking || !inputText.trim()}
+                  className={`absolute right-3 p-2.5 rounded-xl transition-all shadow-sm ${
+                    isRecording || isTranscribing || isThinking || !inputText.trim()
+                      ? 'bg-slate-100 text-slate-300' 
+                      : 'bg-blue-600 text-white hover:bg-blue-700 active:scale-90'
                   }`}
                 >
-                  <Send size={16} strokeWidth={2} className="ml-0.5" />
+                  <Send size={18} strokeWidth={2.5} />
                 </button>
               </div>
 
-              <div className="flex items-center justify-between w-full px-6">
-                <div className="w-12" /> {/* レイアウト調整用 */}
-                
-                <div className="flex flex-col items-center gap-2">
-                  <button 
-                    onClick={handleMicClick}
-                    disabled={isTranscribing}
-                    className={`w-16 h-16 rounded-full flex items-center justify-center text-white shadow-lg transition-all ${
-                      isTranscribing ? 'bg-slate-300 scale-95' :
-                      isRecording ? 'bg-red-500 shadow-red-500/30 scale-110' : 
-                      'bg-blue-500 shadow-blue-500/30 hover:scale-105'
-                    }`}
-                  >
-                    {isTranscribing ? <Loader2 size={24} className="animate-spin" /> : 
-                     isRecording ? <Square size={24} strokeWidth={2} /> : 
-                     <Mic size={28} strokeWidth={1.5} />}
-                  </button>
-                  <span className={`text-[10px] font-medium tracking-wide ${
-                    isTranscribing ? 'text-blue-500' :
-                    isRecording ? 'text-red-500' : 'text-slate-400'
-                  }`}>
-                    {isTranscribing ? '変換中...' :
-                     isRecording ? (isSpeaking ? '🗣️ 音声検知中' : '録音を終了して送信') : 'タップして話す'}
-                  </span>
-                </div>
-                
-                <div className="w-12" /> {/* レイアウト調整用 */}
+              <div className="flex flex-col items-center gap-3">
+                <button 
+                  onClick={handleMicClick}
+                  disabled={isTranscribing || isThinking}
+                  className={`w-20 h-20 rounded-full flex items-center justify-center text-white shadow-2xl transition-all duration-300 group relative ${
+                    isTranscribing || isThinking ? 'bg-slate-200 cursor-not-allowed' :
+                    isRecording ? 'bg-red-500 scale-110 shadow-red-500/40 ring-4 ring-red-50' : 
+                    'bg-slate-900 shadow-slate-900/20 hover:scale-105 active:scale-95 ring-4 ring-slate-50'
+                  }`}
+                >
+                  {isTranscribing || isThinking ? <Loader2 size={28} className="animate-spin opacity-50" /> : 
+                   isRecording ? <Square size={28} className="fill-white" /> : 
+                   <Mic size={32} strokeWidth={1.5} />}
+                  
+                  {isRecording && !isSpeaking && (
+                    <div className="absolute -top-1 -right-1 w-5 h-5 bg-white rounded-full flex items-center justify-center shadow-md">
+                      <div className="w-2 h-2 bg-red-500 rounded-full animate-ping" />
+                    </div>
+                  )}
+                </button>
+                <span className={`text-[10px] font-black uppercase tracking-[0.2em] transition-colors ${
+                  isTranscribing || isThinking ? 'text-blue-400' :
+                  isRecording ? 'text-red-500' : 'text-slate-300'
+                }`}>
+                  {isTranscribing ? 'Processing' :
+                   isThinking ? 'Analyzing' :
+                   isRecording ? (isSpeaking ? 'Voice Detected' : 'Tap to Stop') : 'Tap to Speak'}
+                </span>
               </div>
             </div>
           </div>
