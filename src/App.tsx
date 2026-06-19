@@ -1,12 +1,14 @@
 // src/App.tsx
 import { useState, useEffect, useRef } from 'react';
 import { 
-  Menu, Settings2, X, Clock, Plus, Mic, Send, Activity, Square, Volume2, Loader2 
+  Menu, Settings2, X, Mic, Send, Activity, Square, Volume2, Loader2 
 } from 'lucide-react';
 import { useLoggerStore, initLoggerObserver } from './store/useLoggerStore';
 import { DebugPanel } from './components/DebugPanel';
 import { AudioDiagnostic } from './components/AudioDiagnostic';
 import { audioService } from './services/audioService';
+import { sttService } from './services/sttService';
+import { useAudioPipeline } from './hooks/useAudioPipeline';
 
 interface Message {
   id: string;
@@ -18,98 +20,35 @@ interface Message {
 export default function App() {
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [inputText, setInputText] = useState('');
-  const [isRecording, setIsRecording] = useState(false);
   const [showDiagnostic, setShowDiagnostic] = useState(false);
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   
+  // 💡 追加：文字起こし中（通信中）のローディング状態
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  
   const logEvent = useLoggerStore((state: any) => state.logEvent);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<any>(null);
-  
-  // 意図しない自動停止を防ぐためのフラグ
-  const isManualStopRef = useRef(false);
 
   const gcloudApiKey = import.meta.env.VITE_GOOGLE_CLOUD_API_KEY;
+  const groqApiKey = import.meta.env.VITE_GROQ_API_KEY;
 
-  // 💡 追加：Safariが現在認識しているオーディオ出力先を監視する関数
-  const checkAudioRouting = async (timing: string) => {
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const audioOutputs = devices.filter(d => d.kind === 'audiooutput');
-      
-      logEvent('diagnostic_run', { 
-        payload: { 
-          routing_timing: timing, 
-          outputs: audioOutputs.map(d => d.label || d.deviceId || 'unknown') 
-        } 
-      });
-    } catch (e: any) {
-      logEvent('diagnostic_run', { payload: { routing_timing: timing, error: e.message } });
-    }
-  };
+  const [messages, setMessages] = useState<Message[]>([
+    { id: '1', text: 'おはようございます、ユウキさん。\n新しい音声認識システムの準備が整いました。', sender: 'ai', time: '09:00' },
+  ]);
 
   useEffect(() => {
     initLoggerObserver();
-
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      const rec = new SpeechRecognition();
-      rec.lang = 'ja-JP';
-      
-      // 継続して聞き取り、途中経過も取得する
-      rec.continuous = true;
-      rec.interimResults = true;
-
-      rec.onstart = () => {
-        setIsRecording(true);
-        isManualStopRef.current = false;
-        logEvent('recording_started');
-        checkAudioRouting('after_mic_start'); // 💡 録音開始直後の出力先をチェック
-      };
-
-      rec.onend = () => {
-        setIsRecording(false);
-        logEvent('recording_stopped', { payload: { reason: isManualStopRef.current ? 'manual' : 'auto_timeout' } });
-        checkAudioRouting('after_mic_stop'); // 💡 録音終了直後の出力先をチェック
-      };
-
-      rec.onresult = (event: any) => {
-        let fullTranscript = '';
-        for (let i = 0; i < event.results.length; ++i) {
-          fullTranscript += event.results[i][0].transcript;
-        }
-        if (fullTranscript) {
-          setInputText(fullTranscript); 
-        }
-      };
-
-      rec.onerror = (event: any) => {
-        logEvent('audio_play_error', { error_message: 'Speech Recognition Error: ' + event.error });
-        setIsRecording(false);
-      };
-
-      recognitionRef.current = rec;
-    }
   }, []);
-
-  const [messages, setMessages] = useState<Message[]>([
-    { id: '1', text: 'おはようございます、ユウキさん。\n今日も良い一日にしましょう。', sender: 'ai', time: '09:00' },
-  ]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // 音声出力処理（AIの自動応答用）
+  // ── 1. メッセージ送信とAI応答 ──
   const speakText = async (text: string) => {
-    if (!gcloudApiKey) {
-      logEvent('audio_play_error', { error_message: 'GCP API Key is missing' });
-      return;
-    }
+    if (!gcloudApiKey) return;
     try {
-      logEvent('tts_request_sent');
       logEvent('audio_play_start');
-      await checkAudioRouting('before_tts_play'); // 💡 音声再生直前の出力先をチェック
       await audioService.play(text, 'ja-JP-Neural2-B', gcloudApiKey); 
       logEvent('audio_play_end');
     } catch (error: any) {
@@ -117,7 +56,6 @@ export default function App() {
     }
   };
 
-  // メッセージ送信処理
   const handleSend = (textToSend?: string) => {
     const targetText = textToSend || inputText;
     if (!targetText.trim()) return;
@@ -134,8 +72,9 @@ export default function App() {
     
     logEvent('diagnostic_run', { payload: { action: 'text_sent', textLength: targetText.length } });
 
+    // AIの応答をシミュレート
     setTimeout(() => {
-      const aiReplyText = `「${targetText}」ですね。手動送信からの音声出力をテストしています。`;
+      const aiReplyText = `「${targetText}」ですね。Groq APIによるWhisper文字起こしに成功しました。`;
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
         text: aiReplyText,
@@ -143,60 +82,71 @@ export default function App() {
         time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
       };
       setMessages(prev => [...prev, aiMessage]);
-      
       speakText(aiReplyText);
     }, 1000);
   };
 
-  // マイクボタンのクリック処理（手動停止＆送信）
-  const handleMicClick = () => {
-    audioService.unlock();
-
-    if (!recognitionRef.current) {
-      alert('お使いの環境はブラウザの音声認識機能に対応していません。');
+  // ── 2. 音声録音とテキスト化 (Whisper) のパイプライン ──
+  const handleAudioStop = async (audioBlob: Blob) => {
+    logEvent('recording_stopped', { payload: { reason: 'manual' } });
+    
+    if (!groqApiKey) {
+      alert("Groq API Keyが設定されていません。");
       return;
     }
 
-    if (isRecording) {
-      isManualStopRef.current = true;
-      recognitionRef.current.stop();
+    // 文字起こし中のUI表示
+    setIsTranscribing(true);
+    setInputText('音声をテキストに変換中...');
+
+    try {
+      // Groq (Whisper) へBlobを投げてテキスト化
+      const transcribedText = await sttService.transcribe(audioBlob, groqApiKey);
+      logEvent('stt_response_received', { payload: { text: transcribedText } });
       
-      logEvent('stt_response_received', { payload: { text: inputText } });
-      
-      if (inputText.trim()) {
-        handleSend(inputText);
-      }
-    } else {
+      // テキスト入力欄をクリアし、そのまま送信処理へ
       setInputText('');
-      logEvent('mic_permission_requested');
-      try {
-        recognitionRef.current.start();
-        logEvent('mic_permission_granted');
-      } catch (e: any) {
-        logEvent('audio_play_error', { error_message: 'Mic Start Failed: ' + e.message });
+      if (transcribedText.trim()) {
+        handleSend(transcribedText);
       }
+    } catch (error: any) {
+      setInputText('');
+      alert("文字起こしに失敗しました: " + error.message);
+      logEvent('audio_play_error', { error_message: 'Groq STT Error: ' + error.message });
+    } finally {
+      setIsTranscribing(false);
     }
   };
 
-  // 過去のメッセージを手動で再生する処理
+  // カスタムフックから最強のマイクを呼び出す
+  const { startPipeline, stopPipeline, isRecording, isSpeaking } = useAudioPipeline({
+    onStop: handleAudioStop
+  });
+
+  const handleMicClick = () => {
+    audioService.unlock(); // iOSのAudioContext制約を解除
+
+    if (isRecording) {
+      stopPipeline(); // 録音を終了すると、自動的に handleAudioStop が呼ばれる
+    } else {
+      logEvent('mic_permission_requested');
+      startPipeline();
+      logEvent('recording_started');
+    }
+  };
+
+  // ── 3. 手動再生機能 ──
   const handleManualPlay = async (messageId: string, text: string) => {
     if (playingMessageId === messageId) {
       audioService.stop();
       setPlayingMessageId(null);
       return;
     }
-
     audioService.stop();
     audioService.unlock();
-    
     setPlayingMessageId(messageId);
-    logEvent('tts_request_sent', { payload: { reason: 'manual_play', messageId } });
-
     try {
-      await checkAudioRouting('before_manual_tts_play'); // 💡 手動再生直前の出力先をチェック
-      await audioService.play(text, 'ja-JP-Neural2-B', gcloudApiKey);
-    } catch (error: any) {
-      logEvent('audio_play_error', { error_message: 'Manual Play Error: ' + error });
+      await audioService.play(text, 'ja-JP-Neural2-B', gcloudApiKey!);
     } finally {
       setPlayingMessageId((prev) => (prev === messageId ? null : prev));
     }
@@ -219,20 +169,6 @@ export default function App() {
         </div>
 
         <div className="flex-1 overflow-y-auto py-4 px-3 space-y-6">
-          <div>
-            <h3 className="text-xs font-semibold text-slate-400 mb-3 px-3">会話履歴</h3>
-            <ul className="space-y-1">
-              {[{ icon: <Clock size={16} />, label: '今日の会話' }].map((item, i) => (
-                <li key={i}>
-                  <button className="w-full flex items-center px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors">
-                    <span className="text-slate-400 mr-3">{item.icon}</span>
-                    <span className="truncate">{item.label}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-
           <div>
             <h3 className="text-xs font-semibold text-slate-400 mb-3 px-3">設定とデバッグ</h3>
             <ul className="space-y-1">
@@ -280,12 +216,10 @@ export default function App() {
                     {msg.text}
                   </div>
                   
-                  {/* 時間と再生ボタン */}
                   <div className={`flex items-center mt-1 ${msg.sender === 'user' ? 'mr-1 flex-row-reverse' : 'ml-1'}`}>
                     <span className="text-[10px] text-slate-400">
                       {msg.time}
                     </span>
-                    
                     {msg.sender === 'ai' && (
                       <button
                         onClick={() => handleManualPlay(msg.id, msg.text)}
@@ -309,7 +243,6 @@ export default function App() {
                       </button>
                     )}
                   </div>
-
                 </div>
               ))}
               <div ref={chatEndRef} />
@@ -323,37 +256,56 @@ export default function App() {
               <div className="w-full relative flex items-center">
                 <input 
                   type="text"
-                  placeholder={isRecording ? "聞き取り中..." : "メッセージを入力..."}
+                  placeholder={
+                    isTranscribing ? "音声をテキストに変換中..." :
+                    isRecording ? "マイク録音中..." : "メッセージを入力..."
+                  }
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-full py-3 pl-5 pr-12 text-sm text-slate-700 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 transition-all"
+                  onKeyDown={(e) => e.key === 'Enter' && !isRecording && !isTranscribing && handleSend()}
+                  disabled={isRecording || isTranscribing}
+                  className={`w-full bg-slate-50 border rounded-full py-3 pl-5 pr-12 text-sm text-slate-700 focus:outline-none transition-all ${
+                    isTranscribing ? 'border-blue-300 bg-blue-50/50 animate-pulse text-blue-500' : 'border-slate-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400'
+                  }`}
                 />
-                <button onClick={() => handleSend()} className="absolute right-2 p-2 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors">
+                <button 
+                  onClick={() => handleSend()} 
+                  disabled={isRecording || isTranscribing}
+                  className={`absolute right-2 p-2 text-white rounded-full transition-colors ${
+                    isRecording || isTranscribing ? 'bg-slate-300' : 'bg-blue-500 hover:bg-blue-600'
+                  }`}
+                >
                   <Send size={16} strokeWidth={2} className="ml-0.5" />
                 </button>
               </div>
 
               <div className="flex items-center justify-between w-full px-6">
-                <button className="p-3 text-slate-400 hover:text-blue-500 transition-colors">
-                  <Plus size={24} strokeWidth={1.5} />
-                </button>
+                <div className="w-12" /> {/* レイアウト調整用 */}
+                
                 <div className="flex flex-col items-center gap-2">
                   <button 
                     onClick={handleMicClick}
+                    disabled={isTranscribing}
                     className={`w-16 h-16 rounded-full flex items-center justify-center text-white shadow-lg transition-all ${
-                      isRecording ? 'bg-red-500 shadow-red-500/30 scale-110 animate-pulse' : 'bg-blue-500 shadow-blue-500/30 hover:scale-105'
+                      isTranscribing ? 'bg-slate-300 scale-95' :
+                      isRecording ? 'bg-red-500 shadow-red-500/30 scale-110' : 
+                      'bg-blue-500 shadow-blue-500/30 hover:scale-105'
                     }`}
                   >
-                    {isRecording ? <Square size={24} strokeWidth={2} /> : <Mic size={28} strokeWidth={1.5} />}
+                    {isTranscribing ? <Loader2 size={24} className="animate-spin" /> : 
+                     isRecording ? <Square size={24} strokeWidth={2} /> : 
+                     <Mic size={28} strokeWidth={1.5} />}
                   </button>
-                  <span className={`text-[10px] font-medium tracking-wide ${isRecording ? 'text-red-500' : 'text-slate-400'}`}>
-                    {isRecording ? '録音を終了して送信' : 'タップして話す'}
+                  <span className={`text-[10px] font-medium tracking-wide ${
+                    isTranscribing ? 'text-blue-500' :
+                    isRecording ? 'text-red-500' : 'text-slate-400'
+                  }`}>
+                    {isTranscribing ? '変換中...' :
+                     isRecording ? (isSpeaking ? '🗣️ 音声検知中' : '録音を終了して送信') : 'タップして話す'}
                   </span>
                 </div>
-                <button className="p-3 text-slate-400 hover:text-blue-500 transition-colors">
-                  <Activity size={24} strokeWidth={1.5} />
-                </button>
+                
+                <div className="w-12" /> {/* レイアウト調整用 */}
               </div>
             </div>
           </div>
