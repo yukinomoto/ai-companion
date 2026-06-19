@@ -36,31 +36,45 @@ export const useAudioPipeline = ({ onStop, minDecibels = -45 }: AudioPipelineOpt
 
       const sourceNode = ctx.createMediaStreamSource(stream);
 
-      // 3. ハイパスフィルター（低周波ノイズのカット）
+      // 3. ハイパスフィルター（80Hz以下のロードノイズ等をごっそりカット）
       const highpassFilter = ctx.createBiquadFilter();
       highpassFilter.type = 'highpass';
-      highpassFilter.frequency.value = 80; // 80Hz以下をカット
+      highpassFilter.frequency.value = 80;
 
-      // 4. コンプレッサー（音量の正規化）
+      // 💡追加4: ボーカルブースト（2.5kHz付近を+10dB持ち上げ、ボソボソ声の滑舌を明瞭にする）
+      const vocalBoost = ctx.createBiquadFilter();
+      vocalBoost.type = 'peaking';
+      vocalBoost.frequency.value = 2500;
+      vocalBoost.Q.value = 1.0;
+      vocalBoost.gain.value = 10;
+
+      // 💡追加5: プレゲイン（全体の音量を3倍に増幅）
+      const preGain = ctx.createGain();
+      preGain.gain.value = 3.0;
+
+      // 6. コンプレッサー（増幅しすぎて音割れしないように、大きい音だけを潰す）
       const compressor = ctx.createDynamicsCompressor();
-      compressor.threshold.value = -50;
-      compressor.knee.value = 40;
-      compressor.ratio.value = 12;
-      compressor.attack.value = 0;
+      compressor.threshold.value = -40; // -40dBから圧縮開始（少し早めに効かせる）
+      compressor.knee.value = 30;
+      compressor.ratio.value = 15;      // 圧縮比率を強めに（15:1）
+      compressor.attack.value = 0.005;
       compressor.release.value = 0.25;
 
-      // 5. アナライザー（音量監視・UIフィードバック用）
+      // 7. アナライザー（音量監視・UIフィードバック用）
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 256;
       analyser.minDecibels = minDecibels;
       analyserRef.current = analyser;
 
-      // 6. 出力先（MediaRecorderへ渡すためのノード）
+      // 8. 出力先（MediaRecorderへ渡すためのノード）
       const destination = ctx.createMediaStreamDestination();
 
-      // ノードの接続: マイク -> フィルター -> コンプレッサー -> (アナライザー & 録音先)
+      // 💡 ノードの接続をアップデート
+      // マイク -> ハイパス -> ボーカルブースト -> ゲイン増幅 -> コンプレッサー -> (アナライザー & 録音先)
       sourceNode.connect(highpassFilter);
-      highpassFilter.connect(compressor);
+      highpassFilter.connect(vocalBoost);
+      vocalBoost.connect(preGain);
+      preGain.connect(compressor);
       compressor.connect(analyser);
       compressor.connect(destination);
 
