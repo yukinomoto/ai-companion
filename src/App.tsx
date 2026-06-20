@@ -11,6 +11,7 @@ import { sttService } from './services/sttService';
 import { useAudioPipeline } from './hooks/useAudioPipeline';
 import { supabase } from './lib/supabase';
 import { chatService } from './services/chatService';
+import { titleGenerator } from './services/titleGenerator';
 
 interface Message {
   id: string;
@@ -50,17 +51,18 @@ export default function App() {
 
   const loadSessionList = async () => {
     try {
+      // 💡 NEW: chat_sessionsテーブルから直接IDとタイトルを取得する
       const { data, error } = await supabase
-        .from('chat_messages')
-        .select('session_id, text, created_at')
+        .from('chat_sessions')
+        .select('id, title, created_at')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
+      
       if (data) {
-        const uniqueSessions = Array.from(new Map(data.map(item => [item.session_id, item])).values());
-        setSessionList(uniqueSessions.map(s => ({
-          sessionId: s.session_id,
-          title: s.text.length > 15 ? s.text.slice(0, 15) + '...' : s.text
+        setSessionList(data.map(s => ({
+          sessionId: s.id,
+          title: s.title || '新しいチャット'
         })));
       }
     } catch (error) {
@@ -111,15 +113,33 @@ export default function App() {
     }
   };
 
-  // 💡 引数に isVoice: boolean を追加（デフォルトは false ＝ テキスト入力）
+  // 💡 引数に isVoice: boolean を追加
   const handleSend = async (textToSend?: string, isVoice: boolean = false) => {
     const targetText = textToSend || inputText;
     if (!targetText.trim()) return;
     
-    // 音声入力の時、または手動再生の時だけアンロックすれば十分です
     if (isVoice) {
       audioService.unlock();
     }
+
+    // ==========================================
+    // ①【会話の頭】最初の発言なら仮タイトルでセッションを新規作成（insert）
+    // ==========================================
+    if (messages.length === 0) {
+      const tempTitle = targetText.length > 15 ? targetText.slice(0, 15) + '...' : targetText;
+      
+      const { error: sessionError } = await supabase
+        .from('chat_sessions')
+        .insert({ 
+          id: currentSessionId,
+          title: tempTitle
+        });
+        
+      if (sessionError && sessionError.code !== '23505') {
+        console.error('⚠️ セッション作成エラー:', sessionError.message);
+      }
+    }
+    // ==========================================
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -135,6 +155,7 @@ export default function App() {
     logEvent('diagnostic_run', { payload: { action: 'text_sent', textLength: targetText.length } });
 
     try {
+      // メインのAI応答を生成
       const aiReplyText = await chatService.sendMessage(targetText, currentSessionId);
 
       const aiMessage: Message = {
@@ -146,12 +167,22 @@ export default function App() {
       
       setMessages(prev => [...prev, aiMessage]);
 
-      // 💡 修正：音声入力からトリガーされた場合のみ、自動再生を実行する
       if (isVoice) {
         speakText(aiReplyText);
       }
 
-      loadSessionList();
+      // ==========================================
+      // ②【会話のお尻】1往復目なら裏側で本物のタイトルを自動生成（update）
+      // ==========================================
+      if (messages.length === 0) {
+        // 裏側でGroqを走らせ、タイトルを上書き。完了したらサイドバーを再読み込み。
+        titleGenerator.generateAndSaveTitle(targetText, aiReplyText, currentSessionId)
+          .then(() => loadSessionList());
+      } else {
+        // 2往復目以降は、単純にサイドバーの表示をリフレッシュするだけ
+        loadSessionList();
+      }
+      // ==========================================
 
     } catch (error) {
       console.error('AI応答エラー:', error);
@@ -187,8 +218,9 @@ export default function App() {
     }
   };
 
-  const { startPipeline, stopPipeline, isRecording, isSpeaking } = useAudioPipeline({
-    onStop: handleAudioStop
+  // 💡 修正：フックから currentRms を受け取るように変更
+  const { startPipeline, stopPipeline, isRecording, isSpeaking, currentRms } = useAudioPipeline({
+      onStop: handleAudioStop
   });
 
   const handleMicClick = () => {
@@ -428,6 +460,13 @@ export default function App() {
                    isThinking ? 'Analyzing' :
                    isRecording ? (isSpeaking ? 'Voice Detected' : 'Tap to Stop') : 'Tap to Speak'}
                 </span>
+
+                {/* 💡 NEW: スマホデバッグ用のリアルタイム音圧インジケーターを追加 */}
+                {isRecording && (
+                  <span className="text-[9px] font-mono text-slate-400 opacity-60">
+                    RMS: {(currentRms || 0).toFixed(5)} (Target: 0.01000)
+                  </span>
+                )}
               </div>
             </div>
           </div>

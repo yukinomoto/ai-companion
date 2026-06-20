@@ -8,6 +8,8 @@ interface AudioPipelineOptions {
 export const useAudioPipeline = ({ onStop }: AudioPipelineOptions) => {
   const [isRecording, setIsRecording] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  // 💡 NEW: 現在の音圧を画面に渡すためのState
+  const [currentRms, setCurrentRms] = useState(0);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -23,6 +25,7 @@ export const useAudioPipeline = ({ onStop }: AudioPipelineOptions) => {
     try {
       recordingFramesRef.current = 0;
       speechFramesRef.current = 0;
+      setCurrentRms(0); // リセット
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -39,11 +42,11 @@ export const useAudioPipeline = ({ onStop }: AudioPipelineOptions) => {
 
       const sourceNode = ctx.createMediaStreamSource(stream);
       
-      // 💡 修正：解像度（fftSize）を上げて波形を正確に捉える
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 1024;
       analyserRef.current = analyser;
-      sourceNode.connect(analyser); // 加工前の生の音を計測
+
+      sourceNode.connect(analyser); 
 
       const highpassFilter = ctx.createBiquadFilter();
       highpassFilter.type = 'highpass';
@@ -85,15 +88,14 @@ export const useAudioPipeline = ({ onStop }: AudioPipelineOptions) => {
         const blob = new Blob(chunksRef.current, { type: mimeType });
         chunksRef.current = [];
         
-        // 💡 約130ms以上の明確な音圧があれば「発話あり」とする
         const hasSpoken = speechFramesRef.current >= 8;
-        
         onStop(blob, hasSpoken);
       };
 
       mediaRecorder.start();
       setIsRecording(true);
-      monitorVolume();
+      
+      monitorVolume(true);
 
     } catch (err) {
       console.error('マイクの初期化に失敗しました:', err);
@@ -121,13 +123,12 @@ export const useAudioPipeline = ({ onStop }: AudioPipelineOptions) => {
 
     setIsRecording(false);
     setIsSpeaking(false);
+    setCurrentRms(0); // 停止時は0にする
   }, []);
 
-  const monitorVolume = () => {
+  const monitorVolume = (active: boolean = isRecording) => {
     if (!analyserRef.current) return;
-    
-    // 💡 録音停止ボタンが押された瞬間にループが残っていたら即終了させる
-    if (!isRecording && recordingFramesRef.current > 0) return;
+    if (!active) return;
 
     recordingFramesRef.current++;
 
@@ -140,10 +141,11 @@ export const useAudioPipeline = ({ onStop }: AudioPipelineOptions) => {
     }
     const rms = Math.sqrt(sumSquares / dataArray.length);
     
-    // 💡 閾値を現実的な 0.03 に設定（0.9は高すぎたため戻します）
-    const SPEAKING_THRESHOLD = 0.1; 
+    // 💡 NEW: リアルタイムにStateを更新して画面側に数値を伝える
+    setCurrentRms(rms);
 
-    // 💡 録音開始直後（15f）と、終了時のノイズを避けるため、通常フレームのみカウント
+    const SPEAKING_THRESHOLD = 0.02; 
+
     if (recordingFramesRef.current > 15) {
       if (rms > SPEAKING_THRESHOLD) { 
         speechFramesRef.current++;
@@ -151,7 +153,7 @@ export const useAudioPipeline = ({ onStop }: AudioPipelineOptions) => {
     }
     
     setIsSpeaking(rms > SPEAKING_THRESHOLD);
-    animationFrameRef.current = requestAnimationFrame(monitorVolume);
+    animationFrameRef.current = requestAnimationFrame(() => monitorVolume(active));
   };
 
   useEffect(() => {
@@ -163,5 +165,6 @@ export const useAudioPipeline = ({ onStop }: AudioPipelineOptions) => {
     };
   }, [stopPipeline]);
 
-  return { startPipeline, stopPipeline, isRecording, isSpeaking };
+  // 💡 NEW: currentRms も一緒に外に返すように変更
+  return { startPipeline, stopPipeline, isRecording, isSpeaking, currentRms };
 };
