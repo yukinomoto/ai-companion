@@ -1,7 +1,7 @@
 // src/App.tsx
 import { useState, useEffect, useRef } from 'react';
 import { 
-  Menu, Settings2, X, Mic, Send, Activity, Square, Volume2, Loader2, PlusCircle
+  Menu, X, Mic, Send, Activity, Square, Volume2, Loader2, PlusCircle
 } from 'lucide-react';
 import { useLoggerStore, initLoggerObserver } from './store/useLoggerStore';
 import { DebugPanel } from './components/DebugPanel';
