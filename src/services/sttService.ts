@@ -1,5 +1,4 @@
 // src/services/sttService.ts
-
 export const sttService = {
   transcribe: async (audioBlob: Blob, apiKey: string): Promise<string> => {
     if (!apiKey) {
@@ -7,12 +6,11 @@ export const sttService = {
     }
 
     const formData = new FormData();
-    // iOS Safariでも動くように拡張子を判定
     const extension = audioBlob.type.includes('mp4') ? 'mp4' : 'webm';
     formData.append('file', audioBlob, `audio.${extension}`);
-    formData.append('model', 'whisper-large-v3'); // 最高精度のモデルを指定
-    formData.append('language', 'ja');            // 処理速度向上のため日本語に固定
-    formData.append('temperature', '0.0');        // 幻覚（ハルシネーション）を防ぐために0に設定
+    formData.append('model', 'whisper-large-v3'); 
+    formData.append('language', 'ja');
+    formData.append('temperature', '0.0');        
 
     try {
       const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
@@ -29,7 +27,19 @@ export const sttService = {
       }
 
       const data = await response.json();
-      return data.text;
+      const text = data.text.trim();
+
+      // 💡 幻覚（Hallucination）ガード処理
+      const hallucinationWords = [
+        'ご視聴ありがとうございました', '字幕', 'サブタイトル', 'お疲れ様でした', '無音', 'MBC'
+      ];
+      
+      if (text.length <= 1 || hallucinationWords.some(word => text.includes(word))) {
+        console.warn('STT: 無音または幻覚を検知したためテキストを破棄しました。', text);
+        return ''; 
+      }
+
+      return text;
     } catch (error) {
       console.error('STT（音声認識）エラー:', error);
       throw error;

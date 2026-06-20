@@ -27,7 +27,9 @@ export default function App() {
   
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
+  
   const [currentSessionId, setCurrentSessionId] = useState<string>(crypto.randomUUID());
+  const [sessionList, setSessionList] = useState<{sessionId: string, title: string}[]>([]);
   
   const logEvent = useLoggerStore((state: any) => state.logEvent);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -37,34 +39,38 @@ export default function App() {
 
   const [messages, setMessages] = useState<Message[]>([]);
 
-  // ── 1. 起動時の初期化 ──
   useEffect(() => {
     initLoggerObserver();
-    loadChatHistory(); // 過去の最新セッションを自動ロード
+    loadSessionList(); 
   }, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isThinking]);
 
-  // ── 2. Supabaseから直近のセッション履歴を読み込む ──
-  const loadChatHistory = async () => {
+  const loadSessionList = async () => {
     try {
-      // 最後に会話したレコードから session_id を1件だけ特定する
-      const { data: latestMsg } = await supabase
+      const { data, error } = await supabase
         .from('chat_messages')
-        .select('session_id')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .select('session_id, text, created_at')
+        .order('created_at', { ascending: false });
 
-      // 過去に一度も会話がなければ現在のランダムIDのまま終了
-      if (!latestMsg) return;
+      if (error) throw error;
+      if (data) {
+        const uniqueSessions = Array.from(new Map(data.map(item => [item.session_id, item])).values());
+        setSessionList(uniqueSessions.map(s => ({
+          sessionId: s.session_id,
+          title: s.text.length > 15 ? s.text.slice(0, 15) + '...' : s.text
+        })));
+      }
+    } catch (error) {
+      console.error('セッション一覧の取得失敗:', error);
+    }
+  };
 
-      const targetSessionId = latestMsg.session_id;
+  const loadSpecificSession = async (targetSessionId: string) => {
+    try {
       setCurrentSessionId(targetSessionId);
-
-      // 特定したセッションの全履歴を時系列で取得
       const { data, error } = await supabase
         .from('chat_messages')
         .select('*')
@@ -74,33 +80,26 @@ export default function App() {
       if (error) throw error;
 
       if (data) {
-        const formattedHistory: Message[] = data.map((msg) => ({
+        setMessages(data.map(msg => ({
           id: msg.id,
           text: msg.text,
           sender: msg.sender as 'user' | 'ai',
-          time: new Date(msg.created_at).toLocaleTimeString('ja-JP', { 
-            hour: '2-digit', 
-            minute: '2-digit' 
-          })
-        }));
-        setMessages(formattedHistory);
+          time: new Date(msg.created_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+        })));
       }
+      setSidebarOpen(false);
     } catch (error) {
       console.error('履歴読み込み失敗:', error);
     }
   };
 
-  // ── 3. 新規チャットを開始する（安全にセッションを切り替え） ──
   const handleNewChat = () => {
     logEvent('diagnostic_run', { payload: { action: 'start_new_session' } });
-    
-    // 過去データを破壊せず、新しいUUIDに切り替えて画面をクリア
     setCurrentSessionId(crypto.randomUUID());
     setMessages([]);
     setSidebarOpen(false);
   };
 
-  // ── 4. メッセージ送信とAI応答 ──
   const speakText = async (text: string) => {
     if (!gcloudApiKey) return;
     try {
@@ -116,6 +115,8 @@ export default function App() {
     const targetText = textToSend || inputText;
     if (!targetText.trim()) return;
     
+    audioService.unlock();
+
     const userMessage: Message = {
       id: Date.now().toString(),
       text: targetText,
@@ -130,7 +131,6 @@ export default function App() {
     logEvent('diagnostic_run', { payload: { action: 'text_sent', textLength: targetText.length } });
 
     try {
-      // 本物の脳（Gemini）へセッションIDを伴って送信
       const aiReplyText = await chatService.sendMessage(targetText, currentSessionId);
 
       const aiMessage: Message = {
@@ -143,6 +143,8 @@ export default function App() {
       setMessages(prev => [...prev, aiMessage]);
       speakText(aiReplyText);
 
+      loadSessionList();
+
     } catch (error) {
       console.error('AI応答エラー:', error);
     } finally {
@@ -150,7 +152,6 @@ export default function App() {
     }
   };
 
-  // ── 5. 音声録音とテキスト化パイプライン ──
   const handleAudioStop = async (audioBlob: Blob) => {
     logEvent('recording_stopped', { payload: { reason: 'manual' } });
     if (!groqApiKey) return;
@@ -159,7 +160,8 @@ export default function App() {
     try {
       const transcribedText = await sttService.transcribe(audioBlob, groqApiKey);
       logEvent('stt_response_received', { payload: { text: transcribedText } });
-      if (transcribedText.trim()) {
+      
+      if (transcribedText) {
         handleSend(transcribedText);
       }
     } catch (error: any) {
@@ -174,7 +176,6 @@ export default function App() {
   });
 
   const handleMicClick = () => {
-    audioService.unlock(); 
     if (isRecording) {
       stopPipeline(); 
     } else {
@@ -183,7 +184,6 @@ export default function App() {
     }
   };
 
-  // ── 6. 手動音声再生 ──
   const handleManualPlay = async (messageId: string, text: string) => {
     if (playingMessageId === messageId) {
       audioService.stop();
@@ -201,9 +201,9 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen w-full bg-slate-50 font-sans text-slate-800 overflow-hidden relative">
+    <div className="fixed inset-0 w-full flex bg-slate-50 font-sans text-slate-800 overflow-hidden overscroll-none">
+      {/* 💡 コメントは必ず親タグの内側に配置します */}
       
-      {/* ── サイドメニュー (Overlay) ── */}
       {isSidebarOpen && (
         <div className="absolute inset-0 bg-slate-900/20 z-40 transition-opacity" onClick={() => setSidebarOpen(false)} />
       )}
@@ -217,7 +217,6 @@ export default function App() {
         </div>
 
         <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8">
-          {/* 💡 セッション切り替え用の新規チャットボタン */}
           <div>
             <button 
               onClick={handleNewChat}
@@ -227,6 +226,28 @@ export default function App() {
               <span className="text-sm font-semibold">新規チャットを始める</span>
             </button>
           </div>
+
+          {sessionList.length > 0 && (
+            <div>
+              <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-4 px-1">過去の会話</h3>
+              <ul className="space-y-2">
+                {sessionList.map((session) => (
+                  <li key={session.sessionId}>
+                    <button 
+                      onClick={() => loadSpecificSession(session.sessionId)}
+                      className={`w-full flex items-center px-4 py-3 text-sm rounded-xl transition-colors truncate ${
+                        currentSessionId === session.sessionId 
+                          ? 'bg-blue-50 text-blue-600 font-bold' 
+                          : 'text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span className="truncate">{session.title}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           <div>
             <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-4 px-1">メンテナンス</h3>
@@ -249,25 +270,18 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── メイン画面 ── */}
       <div className="flex-1 flex flex-col h-full bg-slate-50 max-w-4xl mx-auto w-full shadow-inner">
         <header className="flex items-center justify-between px-6 py-4 bg-white/80 backdrop-blur-md border-b border-slate-100 z-10 shrink-0">
           <button onClick={() => setSidebarOpen(true)} className="p-2 text-slate-500 hover:text-slate-800 transition-colors bg-slate-50 rounded-lg">
             <Menu size={22} strokeWidth={1.5} />
           </button>
-          <div className="flex flex-col items-center">
-            <h1 className="text-sm font-bold text-slate-800 tracking-tighter">PARTNER AI</h1>
-            <div className="flex items-center gap-1">
-              <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
-              <span className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">Connected</span>
-            </div>
-          </div>
-          <button className="p-2 text-slate-500 hover:text-slate-800 transition-colors bg-slate-50 rounded-lg">
-            <Settings2 size={22} strokeWidth={1.5} />
-          </button>
+          
+          <h1 className="text-sm font-bold text-slate-800 tracking-tighter">PARTNER AI</h1>
+          
+          <div className="w-[38px]" />
         </header>
 
-        <main className="flex-1 overflow-y-auto p-6 space-y-8 scroll-smooth">
+        <main className="flex-1 overflow-y-auto overscroll-none p-6 space-y-8 scroll-smooth">
           {showDiagnostic ? (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
               <button onClick={() => setShowDiagnostic(false)} className="text-xs font-bold text-blue-500 hover:text-blue-700 mb-6 flex items-center bg-blue-50 px-3 py-2 rounded-lg">
@@ -351,7 +365,7 @@ export default function App() {
                   onChange={(e) => setInputText(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && !isRecording && !isTranscribing && !isThinking && handleSend()}
                   disabled={isRecording || isTranscribing || isThinking}
-                  className={`w-full bg-slate-50 border rounded-2xl py-4 pl-6 pr-14 text-sm text-slate-700 focus:outline-none transition-all ${
+                  className={`w-full bg-slate-50 border rounded-2xl py-4 pl-6 pr-14 text-[16px] text-slate-700 focus:outline-none transition-all ${
                     isTranscribing || isThinking 
                       ? 'border-blue-200 bg-blue-50/30 text-blue-400 italic' 
                       : 'border-slate-100 focus:border-blue-300 focus:ring-4 focus:ring-blue-500/5'
