@@ -4,7 +4,7 @@ import { GoogleGenAI, Type, type Schema } from '@google/genai';
 import { SYSTEM_PROMPTS } from '../prompts';
 
 const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
-const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+const ai = new GoogleGenAI({ apiKey: geminiApiKey || '' });
 
 export const memoryExtractor = {
   processConversation: async (userMessage: string, aiResponse: string) => {
@@ -49,18 +49,31 @@ export const memoryExtractor = {
 
       for (const item of extractedData) {
         const embedText = `トピック: ${item.topic_name}\n内容: ${item.summary}`;
-        const embedResponse = await ai.models.embedContent({
-          model: 'text-embedding-004',
-          contents: embedText,
+        
+        // 💡 SDKのバグを回避するため、fetchで直接REST APIを叩く
+        const embedResponse = await fetch(`https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent?key=${geminiApiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'models/text-embedding-004',
+            content: {
+              parts: [{ text: embedText }]
+            }
+          })
         });
 
-        const embeddings = embedResponse.embeddings;
-        if (!embeddings || embeddings.length === 0 || !embeddings[0].values) {
-          console.warn(`⚠️ ベクトルの取得に失敗したためスキップします: ${item.topic_name}`);
+        if (!embedResponse.ok) {
+          console.warn(`⚠️ ベクトルの取得APIエラー: ${embedResponse.statusText}`);
+          continue;
+        }
+
+        const embedData = await embedResponse.json();
+        const embeddingVector = embedData.embedding?.values;
+
+        if (!embeddingVector || embeddingVector.length === 0) {
+          console.warn(`⚠️ ベクトルデータのフォーマット異常のためスキップします: ${item.topic_name}`);
           continue; 
         }
-        
-        const embeddingVector = embeddings[0].values;
 
         const { data: existingNode } = await supabase
           .from('user_nodes')
