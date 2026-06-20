@@ -6,6 +6,15 @@ import { SYSTEM_PROMPTS } from '../prompts';
 const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
 const ai = new GoogleGenAI({ apiKey: geminiApiKey || '' });
 
+// ---------------------------------------------------------
+// ⚙️ 定数定義（マジックナンバー排除原則）
+// ---------------------------------------------------------
+const SCORE_INCREMENT = 10.0;
+const SCORE_MAX = 100.0;
+const SCORE_INITIAL = 10.0;
+const THRESHOLD_VALUE = 80.0;
+const THRESHOLD_INTEREST = 50.0;
+
 export const memoryExtractor = {
   processConversation: async (userMessage: string, aiResponse: string) => {
     if (!geminiApiKey) {
@@ -22,9 +31,19 @@ export const memoryExtractor = {
         items: {
           type: Type.OBJECT,
           properties: {
-            topic_name: { type: Type.STRING, description: "トピックの短い名前（例: 'React', 'モンステラ'）" },
-            summary: { type: Type.STRING, description: "ユーザーがそれについてどう考えているかの詳細な要約" },
-            category: { type: Type.STRING, description: "fact, interest, value のいずれか" }
+            topic_name: { 
+              type: Type.STRING, 
+              // 💡 ここを修正：固有名詞や「誰の」を明確にするよう指示
+              description: "トピックの具体的で一意な名前。単なる「名前」「仕事」のような曖昧な単語は避け、「ユーザーの名前」「野元勇希」「Reactの開発」など、後から検索して他と混同しない固有の名称にすること" 
+            },
+            summary: { 
+              type: Type.STRING, 
+              description: "記憶の具体的な内容。観察記録のような客観的すぎる表現は避け、「ユーザーの名前は野元勇希である」「〜が好き」など、簡潔で自然な事実として記述すること" 
+            },
+            category: { 
+              type: Type.STRING, 
+              description: "fact, interest, value のいずれか" 
+            }
           },
           required: ["topic_name", "summary", "category"],
         },
@@ -42,7 +61,7 @@ export const memoryExtractor = {
 
       const extractedData = JSON.parse(response.text || '[]');
 
-      if (extractedData.length === 0) {
+      if (!Array.isArray(extractedData) || extractedData.length === 0) {
         console.log('📝 抽出する新しい記憶はありませんでした。');
         return;
       }
@@ -50,61 +69,87 @@ export const memoryExtractor = {
       for (const item of extractedData) {
         const embedText = `トピック: ${item.topic_name}\n内容: ${item.summary}`;
         
-        // 💡 SDKのバグを回避するため、fetchで直接REST APIを叩く
-        const embedResponse = await fetch(`https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent?key=${geminiApiKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: 'models/text-embedding-004',
-            content: {
-              parts: [{ text: embedText }]
+        let embeddingVector: number[] | undefined;
+        
+        try {
+          const embedResponse = await ai.models.embedContent({
+            model: 'gemini-embedding-2', 
+            contents: embedText,
+            // 💡 復活：DBの限界に合わせて出力サイズを768次元に制限する
+            config: {
+              outputDimensionality: 768 
             }
-          })
-        });
-
-        if (!embedResponse.ok) {
-          console.warn(`⚠️ ベクトルの取得APIエラー: ${embedResponse.statusText}`);
+          });
+          
+          embeddingVector = embedResponse.embeddings?.[0]?.values;
+          
+        } catch (embedError) {
+          console.warn(`⚠️ ベクトルの取得APIエラー (${item.topic_name}):`, embedError);
           continue;
         }
 
-        const embedData = await embedResponse.json();
-        const embeddingVector = embedData.embedding?.values;
-
         if (!embeddingVector || embeddingVector.length === 0) {
-          console.warn(`⚠️ ベクトルデータのフォーマット異常のためスキップします: ${item.topic_name}`);
+          console.warn(`⚠️ ベクトルデータが空のためスキップします: ${item.topic_name}`);
           continue; 
         }
 
-        const { data: existingNode } = await supabase
+        const { data: existingNode, error: fetchError } = await supabase
           .from('user_nodes')
           .select('id, strength_score, mention_count')
           .eq('topic_name', item.topic_name)
-          .single();
+          .maybeSingle();
+
+        if (fetchError) {
+          console.error(`⚠️ DB検索エラー (${item.topic_name}):`, fetchError.message);
+          continue;
+        }
 
         if (existingNode) {
-          const newScore = Math.min(existingNode.strength_score + 10.0, 100.0);
-          await supabase
+          const newScore = Math.min(existingNode.strength_score + SCORE_INCREMENT, SCORE_MAX);
+          const newCategory = newScore >= THRESHOLD_VALUE ? 'value' 
+                            : (newScore >= THRESHOLD_INTEREST ? 'interest' : item.category);
+
+          // 💡 計測のため error オブジェクトを受け取る
+          const { error: updateError } = await supabase
             .from('user_nodes')
             .update({
               summary: item.summary,
               strength_score: newScore,
-              mention_count: existingNode.mention_count + 1,
+              mention_count: (existingNode.mention_count || 1) + 1,
               last_observed_at: new Date().toISOString(),
               embedding: embeddingVector,
-              category: newScore >= 80 ? 'value' : (newScore >= 50 ? 'interest' : item.category)
+              category: newCategory
             })
             .eq('id', existingNode.id);
+            
+          // 💡 エラー内容を詳細にログ出力する
+          if (updateError) {
+            console.error(`⚠️ DB更新エラー詳細 (${item.topic_name}):`, updateError.message, updateError.details);
+            continue;
+          }
+            
           console.log(`🧠 記憶を更新・強化しました: ${item.topic_name} (スコア: ${newScore})`);
         } else {
-          await supabase
+          // 💡 計測のため error オブジェクトを受け取る
+          const { error: insertError } = await supabase
             .from('user_nodes')
             .insert({
               topic_name: item.topic_name,
               summary: item.summary,
               category: item.category,
-              strength_score: 10.0,
-              embedding: embeddingVector
+              strength_score: SCORE_INITIAL,
+              embedding: embeddingVector,
+              mention_count: 1,
+              first_observed_at: new Date().toISOString(),
+              last_observed_at: new Date().toISOString()
             });
+            
+          // 💡 エラー内容を詳細にログ出力する
+          if (insertError) {
+            console.error(`⚠️ DB登録エラー詳細 (${item.topic_name}):`, insertError.message, insertError.details);
+            continue;
+          }
+            
           console.log(`🌱 新しい記憶を記録しました: ${item.topic_name}`);
         }
       }

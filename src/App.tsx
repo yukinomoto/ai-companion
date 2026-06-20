@@ -111,11 +111,15 @@ export default function App() {
     }
   };
 
-  const handleSend = async (textToSend?: string) => {
+  // 💡 引数に isVoice: boolean を追加（デフォルトは false ＝ テキスト入力）
+  const handleSend = async (textToSend?: string, isVoice: boolean = false) => {
     const targetText = textToSend || inputText;
     if (!targetText.trim()) return;
     
-    audioService.unlock();
+    // 音声入力の時、または手動再生の時だけアンロックすれば十分です
+    if (isVoice) {
+      audioService.unlock();
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -141,7 +145,11 @@ export default function App() {
       };
       
       setMessages(prev => [...prev, aiMessage]);
-      speakText(aiReplyText);
+
+      // 💡 修正：音声入力からトリガーされた場合のみ、自動再生を実行する
+      if (isVoice) {
+        speakText(aiReplyText);
+      }
 
       loadSessionList();
 
@@ -152,8 +160,15 @@ export default function App() {
     }
   };
 
-  const handleAudioStop = async (audioBlob: Blob) => {
+  // ── 6. 音声録音とテキスト化パイプラインからの呼び出し ──
+  const handleAudioStop = async (audioBlob: Blob, hasSpoken: boolean) => {
     logEvent('recording_stopped', { payload: { reason: 'manual' } });
+
+    if (!hasSpoken) {
+      console.log('無音のため文字起こしをスキップしました');
+      return;
+    }
+
     if (!groqApiKey) return;
 
     setIsTranscribing(true);
@@ -162,7 +177,8 @@ export default function App() {
       logEvent('stt_response_received', { payload: { text: transcribedText } });
       
       if (transcribedText) {
-        handleSend(transcribedText);
+        // 💡 修正：音声からのテキスト化なので、第二引数に true を渡す
+        handleSend(transcribedText, true);
       }
     } catch (error: any) {
       alert("文字起こしに失敗しました: " + error.message);
@@ -363,7 +379,7 @@ export default function App() {
                   }
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && !isRecording && !isTranscribing && !isThinking && handleSend()}
+                  onKeyDown={(e) => e.key === 'Enter' && !isRecording && !isTranscribing && !isThinking && handleSend(undefined, false)}
                   disabled={isRecording || isTranscribing || isThinking}
                   className={`w-full bg-slate-50 border rounded-2xl py-4 pl-6 pr-14 text-[16px] text-slate-700 focus:outline-none transition-all ${
                     isTranscribing || isThinking 
@@ -372,7 +388,7 @@ export default function App() {
                   }`}
                 />
                 <button 
-                  onClick={() => handleSend()} 
+                  onClick={() => handleSend(undefined, false)}
                   disabled={isRecording || isTranscribing || isThinking || !inputText.trim()}
                   className={`absolute right-3 p-2.5 rounded-xl transition-all shadow-sm ${
                     isRecording || isTranscribing || isThinking || !inputText.trim()
