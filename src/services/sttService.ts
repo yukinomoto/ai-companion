@@ -3,7 +3,7 @@ import { apiConfig, API_MODELS } from '../config/apiConfig';
 import { apiWrapper } from '../utils/apiWrapper';
 
 export const sttService = {
-  transcribe: async (audioBlob: Blob, apiKey: string): Promise<string> => {
+  transcribe: async (audioBlob: Blob): Promise<string> => {
     // 💡 対策A: そもそもファイルサイズが小さすぎる（ノイズすらない）場合は即座に弾く
     if (audioBlob.size < 1000) { 
       console.warn('STT: 音声データが小さすぎるため送信をブロックしました。');

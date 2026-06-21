@@ -10,7 +10,7 @@ const TEMPERATURE = 0.1;
 const MAX_TOKENS = 1024;
 
 export const textFixerService = {
-  async fixText(rawText: string, groqApiKey: string): Promise<string> {
+  async fixText(rawText: string): Promise<string> {
     if (!rawText.trim()) return rawText;
     const logEvent = useLoggerStore.getState().logEvent;
 

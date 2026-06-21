@@ -181,11 +181,11 @@ export default function App() {
 
     setIsTranscribing(true);
     try {
-      const transcribedText = await sttService.transcribe(audioBlob, groqApiKey);
+      const transcribedText = await sttService.transcribe(audioBlob); // 💡 キーを渡さない
       logEvent('stt_response_received', { payload: { text: transcribedText } });
       
       if (transcribedText) {
-        const fixedText = await textFixerService.fixText(transcribedText, groqApiKey);
+        const fixedText = await textFixerService.fixText(transcribedText); // 💡 キーを渡さない
         handleSend(fixedText, true);
       }
     } catch (error: any) {
