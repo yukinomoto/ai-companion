@@ -92,7 +92,8 @@ export const useAudioPipeline = ({ onStop }: AudioPipelineOptions) => {
         onStop(blob, hasSpoken);
       };
 
-      mediaRecorder.start();
+      // 💡 修正ポイント：1000ミリ秒（1秒）ごとにデータを強制的に吐き出させて、iOSのメモリバグを回避する
+      mediaRecorder.start(1000);
       setIsRecording(true);
       
       monitorVolume(true);
