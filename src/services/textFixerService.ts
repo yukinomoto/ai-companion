@@ -2,9 +2,10 @@
 import { dbService } from './dbService';
 import { SYSTEM_PROMPTS } from '../prompts';
 import { useLoggerStore } from '../store/useLoggerStore';
+import { apiConfig, API_MODELS } from '../config/apiConfig';
+import { apiWrapper } from '../utils/apiWrapper';
 
 // ⚙️ 定数定義
-const LLAMA_MODEL = 'llama-3.1-8b-instant';
 const TEMPERATURE = 0.1;
 const MAX_TOKENS = 1024;
 
@@ -26,21 +27,31 @@ export const textFixerService = {
         : '';
       const systemPrompt = `${SYSTEM_PROMPTS.TEXT_FIXER}${dictionaryString}`;
 
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: LLAMA_MODEL,
-          messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: rawText }],
-          temperature: TEMPERATURE,
-          max_tokens: MAX_TOKENS
-        })
+      // 🛡️ シールド発動：Groqの通信をラッパーで保護
+      const fixedText = await apiWrapper.execute('GROQ', false, async () => {
+        // 💡 引数の apiKey ではなく、リトライ時に自動で切り替わる apiConfig の最新キーを使用する
+        const currentGroqKey = apiConfig.getGroqApiKey();
+        if (!currentGroqKey) throw new Error('Groq API Key is missing');
+
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${currentGroqKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: API_MODELS.GROQ.TEXT_FIXER, // 💡 定数を利用
+            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: rawText }],
+            temperature: TEMPERATURE,
+            max_tokens: MAX_TOKENS
+          })
+        });
+
+        if (!response.ok) {
+          // 429エラー等をラッパーに検知させるためにステータスを付与してthrow
+          throw Object.assign(new Error(`Groq Error: ${response.status}`), { status: response.status });
+        }
+
+        const resData = await response.json();
+        return resData.choices?.[0]?.message?.content?.trim();
       });
-
-      if (!response.ok) throw new Error(`Groq Error: ${response.status}`);
-
-      const resData = await response.json();
-      const fixedText = resData.choices?.[0]?.message?.content?.trim();
 
       if (fixedText) {
         logEvent('diagnostic_run', { payload: { note: 'Text Fixed', original: rawText, fixed: fixedText } });
@@ -49,7 +60,7 @@ export const textFixerService = {
       return rawText;
     } catch (error: any) {
       logEvent('audio_play_error', { error_message: `Text Fixer Failed: ${error.message}` });
-      return rawText;
+      return rawText; // エラー時（セカンダリキーも枯渇等）は元のテキストをそのまま返す（フェイルセーフ）
     }
   }
 };

@@ -1,7 +1,7 @@
 // src/App.tsx
 import { useState, useEffect, useRef } from 'react';
 import { 
-  Menu, X, Mic, Send, Activity, Square, Volume2, Loader2, PlusCircle
+  Menu, X, Mic, Activity, Square, Volume2, Loader2, PlusCircle
 } from 'lucide-react';
 import { useLoggerStore, initLoggerObserver } from './store/useLoggerStore';
 import { DebugPanel } from './components/DebugPanel';
@@ -10,14 +10,16 @@ import { audioService } from './services/audioService';
 import { sttService } from './services/sttService';
 import { useAudioPipeline } from './hooks/useAudioPipeline';
 import { supabase } from './lib/supabase';
-import { chatService } from './services/chatService';
+import { chatService, type MultimodalImage } from './services/chatService'; // 💡 型をインポート
 import { textFixerService } from './services/textFixerService';
+import { ChatInput } from './components/ChatInput'; // 💡 コンポーネントをインポート
 
 interface Message {
   id: string;
   text: string;
   sender: 'user' | 'ai';
   time: string;
+  imageUrl?: string; // 💡 画面表示用の画像URLを追加
 }
 
 export default function App() {
@@ -108,19 +110,18 @@ export default function App() {
     }
   };
 
-  const handleSend = async (textToSend?: string, isVoice: boolean = false) => {
+  // 💡 引数に imageToSend を追加し、画像のみの送信も許可
+  const handleSend = async (textToSend?: string, isVoice: boolean = false, imageToSend?: MultimodalImage) => {
     const targetText = textToSend || inputText;
-    if (!targetText.trim()) return;
+    if (!targetText.trim() && !imageToSend) return; 
     
     if (isVoice) {
       audioService.unlock();
     }
 
-    // ==========================================
-    // ①【会話の頭】最初の発言なら仮タイトルでセッションを新規作成（insert）
-    // ==========================================
     if (messages.length === 0) {
-      const tempTitle = targetText.length > 15 ? targetText.slice(0, 15) + '...' : targetText;
+      const titleSource = targetText.trim() ? targetText : '画像アップロード';
+      const tempTitle = titleSource.length > 15 ? titleSource.slice(0, 15) + '...' : titleSource;
       
       const { error: sessionError } = await supabase
         .from('chat_sessions')
@@ -137,16 +138,17 @@ export default function App() {
       id: Date.now().toString(),
       text: targetText,
       sender: 'user',
-      time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+      time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }),
+      imageUrl: imageToSend ? `data:${imageToSend.mimeType};base64,${imageToSend.base64}` : undefined // 💡 画面表示用のURL
     };
     setMessages(prev => [...prev, userMessage]);
     setInputText(''); 
     setIsThinking(true);
     
-    logEvent('diagnostic_run', { payload: { action: 'text_sent', textLength: targetText.length } });
+    logEvent('diagnostic_run', { payload: { action: 'text_sent', hasImage: !!imageToSend } });
     try {
-      // メメインのAI応答を生成
-      const aiReplyText = await chatService.sendMessage(targetText, currentSessionId);
+      // 💡 chatService に画像を渡す
+      const aiReplyText = await chatService.sendMessage(targetText, currentSessionId, imageToSend);
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
         text: aiReplyText,
@@ -159,12 +161,6 @@ export default function App() {
         speakText(aiReplyText);
       }
 
-      // ==========================================
-      // ②【会話のお尻】サイドバーのリフレッシュのみ
-      // ==========================================
-      // 💡 修正：phraseExtractor側が裏の非同期処理で「ナレッジグラフ抽出」と同時に
-      // 「会話タイトルの自動生成・上書き」も一括兼任するようになったため、
-      // UI側（App.tsx）はシンプルにセッションリストをリフレッシュするだけで完結します。
       loadSessionList();
 
     } catch (error) {
@@ -326,14 +322,22 @@ export default function App() {
                   <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Waiting for your voice...</p>
                 </div>
               )}
-     
+      
               {messages.map((msg) => (
                 <div key={msg.id} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'} w-full animate-in fade-in duration-500`}>
-                  <div className={`max-w-[88%] p-4 rounded-3xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap ${
+                  <div className={`max-w-[88%] p-4 rounded-3xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap flex flex-col ${
                     msg.sender === 'user' 
                       ? 'bg-blue-600 text-white rounded-tr-none' 
                       : 'bg-white border border-slate-100 text-slate-700 rounded-tl-none'
                   }`}>
+                    {/* 💡 画像があればテキストの上に描画 */}
+                    {msg.imageUrl && (
+                      <img 
+                        src={msg.imageUrl} 
+                        alt="Uploaded" 
+                        className="w-full max-w-[240px] rounded-xl mb-2 object-cover border border-white/20 shadow-sm" 
+                      />
+                    )}
                     {msg.text}
                   </div>
               
@@ -381,36 +385,16 @@ export default function App() {
         {!showDiagnostic && (
           <div className="w-full bg-white/80 backdrop-blur-lg border-t border-slate-100 p-6 shrink-0 shadow-2xl">
             <div className="max-w-2xl mx-auto flex flex-col items-center gap-6">
-              <div className="w-full relative flex items-center group">
-                <input 
-                  type="text"
-                  placeholder={
-                    isTranscribing ? "Transcribing voice..." :
-                    isThinking ? "Thinking..." :
-                    isRecording ? "Listening..." : "Message AI Partner..."
-                  }
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && !isRecording && !isTranscribing && !isThinking && handleSend(undefined, false)}
-                  disabled={isRecording || isTranscribing || isThinking}
-                  className={`w-full bg-slate-50 border rounded-2xl py-4 pl-6 pr-14 text-[16px] text-slate-700 focus:outline-none transition-all ${
-                    isTranscribing || isThinking 
-                      ? 'border-blue-200 bg-blue-50/30 text-blue-400 italic' 
-                      : 'border-slate-100 focus:border-blue-300 focus:ring-4 focus:ring-blue-500/5'
-                  }`}
-                />
-                <button 
-                  onClick={() => handleSend(undefined, false)}
-                  disabled={isRecording || isTranscribing || isThinking || !inputText.trim()}
-                  className={`absolute right-3 p-2.5 rounded-xl transition-all shadow-sm ${
-                    isRecording || isTranscribing || isThinking || !inputText.trim()
-                      ? 'bg-slate-100 text-slate-300' 
-                      : 'bg-blue-600 text-white hover:bg-blue-700 active:scale-90'
-                  }`}
-                >
-                  <Send size={18} strokeWidth={2.5} />
-                </button>
-              </div>
+              
+              {/* 💡 コンポーネント化した入力欄をここに配置 */}
+              <ChatInput 
+                inputText={inputText}
+                setInputText={setInputText}
+                isTranscribing={isTranscribing}
+                isThinking={isThinking}
+                isRecording={isRecording}
+                onSend={handleSend}
+              />
 
               <div className="flex flex-col items-center gap-3">
                 <button 
