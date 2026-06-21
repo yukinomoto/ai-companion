@@ -23,26 +23,66 @@ export function ChatInput({
   const [selectedImage, setSelectedImage] = useState<MultimodalImage | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // 💡 追加：画像をブラウザ側で綺麗にリサイズ・圧縮する処理
+  const compressImage = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          // Geminiが十分に認識できて、かつ容量が軽いベストなサイズ（最大1024px）
+          const MAX_SIZE = 1024;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > MAX_SIZE) {
+              height *= MAX_SIZE / width;
+              width = MAX_SIZE;
+            }
+          } else {
+            if (height > MAX_SIZE) {
+              width *= MAX_SIZE / height;
+              height = MAX_SIZE;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return reject('Canvas rendering failed');
+          
+          ctx.drawImage(img, 0, 0, width, height);
+          // 画質を80%にして軽量なJPEGに変換（これで数MBの画像が数百KBになります）
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+          resolve(dataUrl);
+        };
+        img.src = event.target?.result as string;
+      };
+      reader.onerror = error => reject(error);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // 💡 制限: 5MB以下の画像のみ許可
-    if (file.size > 5 * 1024 * 1024) {
-      alert('画像サイズは5MB以下にしてください。');
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const base64Data = event.target?.result as string;
-      const base64 = base64Data.split(',')[1];
+    try {
+      // 💡 圧縮処理を実行
+      const compressedDataUrl = await compressImage(file);
+      const base64 = compressedDataUrl.split(',')[1];
+      
       setSelectedImage({
         base64,
-        mimeType: file.type,
+        mimeType: 'image/jpeg', // 圧縮時にJPEGに統一
       });
-    };
-    reader.readAsDataURL(file);
+    } catch (error) {
+      console.error('画像圧縮エラー:', error);
+      alert('画像の処理に失敗しました。');
+    }
+    
     e.target.value = ''; // 連続で同じ画像を選べるようにリセット
   };
 
@@ -77,13 +117,13 @@ export function ChatInput({
       <div className="w-full relative flex items-center group">
         <input 
           type="file" 
-          accept="image/jpeg, image/png, image/webp" 
+          accept="image/*" // iPhoneからHEICなども選べるように拡張
           className="hidden" 
           ref={fileInputRef} 
           onChange={handleFileChange} 
         />
         
-        {/* 画像選択（クリップ）ボタン */}
+        {/* 画像選択ボタン */}
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled}
