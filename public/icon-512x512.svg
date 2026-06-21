@@ -1,0 +1,38 @@
+<svg id="svg3" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <linearGradient id="bg3" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#eff6ff"/>
+                                <stop offset="100%" stop-color="#e0f2fe"/>
+                            </linearGradient>
+                            <linearGradient id="circle1" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#3b82f6"/>
+                                <stop offset="100%" stop-color="#1e40af"/>
+                            </linearGradient>
+                            <linearGradient id="circle2" x1="100%" y1="0%" x2="0%" y2="100%">
+                                <stop offset="0%" stop-color="#ffffff" stop-opacity="0.9"/>
+                                <stop offset="100%" stop-color="#bfdbfe" stop-opacity="0.5"/>
+                            </linearGradient>
+                            <filter id="glassBlur" x="-20%" y="-20%" width="140%" height="140%">
+                                <feDropShadow dx="0" dy="15" stdDeviation="20" flood-color="#3b82f6" flood-opacity="0.2"/>
+                            </filter>
+                        </defs>
+                        <!-- Background -->
+                        <rect width="512" height="512" rx="116" fill="url(#bg3)"/>
+                        
+                        <!-- User & AI Partner Spheres -->
+                        <g filter="url(#glassBlur)">
+                            <!-- AI Partner (Solid Core) -->
+                            <circle cx="216" cy="306" r="140" fill="url(#circle1)"/>
+                            
+                            <!-- User/Context (Glassmorphism overlap) -->
+                            <circle cx="316" cy="196" r="130" fill="url(#circle2)" stroke="#ffffff" stroke-width="4" stroke-opacity="0.6"/>
+                            
+                            <!-- Interaction Light -->
+                            <path d="M 230 220 Q 280 250 250 300 Q 200 270 230 220 Z" fill="#ffffff" opacity="0.4" filter="blur(8px)"/>
+                        </g>
+                        
+                        <!-- Sparkles (Intelligent processing) -->
+                        <circle cx="400" cy="100" r="8" fill="#ffffff" opacity="0.9"/>
+                        <circle cx="430" cy="130" r="4" fill="#ffffff" opacity="0.6"/>
+                        <circle cx="120" cy="400" r="6" fill="#60a5fa" opacity="0.8"/>
+                    </svg>
