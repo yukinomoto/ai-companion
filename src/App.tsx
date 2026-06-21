@@ -46,6 +46,13 @@ export default function App() {
   useEffect(() => {
     initLoggerObserver();
     loadSessionList(); 
+
+    // 💡 追加：最新ブラウザ向けの画面向きロック（Web API）
+    if (screen.orientation && typeof screen.orientation.lock === 'function') {
+      screen.orientation.lock('portrait').catch((err) => {
+        console.log('Orientation lock skipped or not supported:', err.message);
+      });
+    }
   }, []);
 
   useEffect(() => {

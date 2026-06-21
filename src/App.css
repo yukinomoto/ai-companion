@@ -29,22 +29,50 @@ html, body {
 .hide-scrollbar::-webkit-scrollbar { display: none; }
 .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
+
 /* ==========================================
-   📱 💡 スマホ用：画面回転を完全に封殺する縦画面固定シールド
+   📱 💡 最新iOS PWA対応：縦画面固定警告シールド
+   （インプット欄のズレや回転バグを物理的に防ぐ防壁）
    ========================================== */
-@media screen and (min-width: 320px) and (max-width: 960px) and (orientation: landscape) {
-  .portrait-lock {
+@media screen and (orientation: landscape) {
+  html, body {
     position: fixed;
-    top: 0; left: 0;
-    width: 100dvh !important;
-    height: 100dvw !important;
-    transform: rotate(-90deg);
-    transform-origin: top left;
-    top: 100dvh;
-    left: 0;
-    overflow: hidden;
+    width: 100vw !important;
+    height: 100vh !important;
+    overflow: hidden !important;
+  }
+
+  /* 横向きの時はアプリ本体（#root）を非表示にし、textarea等の配置が狂うのを完全に防ぐ */
+  #root {
+    display: none !important;
+  }
+
+  /* 画面が横を向いている状態でも、テキストだけは縦向き（直立）に読めるように配置 */
+  body::before {
+    content: "MA-i は縦画面専用です。\n\nスマホを縦に持ち直してください。";
+    white-space: pre-wrap;
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: 100vh; /* 横画面の高さに合わせる */
+    height: 100vw; /* 横画面の幅に合わせる */
+    background-color: #1e40af; /* MA-iのテーマカラー（濃い青） */
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    font-weight: bold;
+    letter-spacing: 0.05em;
+    text-align: center;
+    line-height: 1.8;
+    z-index: 999999;
+    /* 💡 横を向いた画面に対して、テキストレイヤーをマイナス90度回して縦表示を維持 */
+    transform: translate(-50%, -50%) rotate(-90deg);
+    transform-origin: center;
   }
 }
+
 
 /* ==========================================
    UI Components & Animations
@@ -83,8 +111,9 @@ html, body {
   filter: drop-shadow(0 4px 2px rgba(0, 0, 0, 0.05));
 }
 
+
 /* ==========================================
-   🌟 【復活】テキスト表示モード
+   🌟 テキスト表示モード
    ========================================== */
 .chat-display-overlay {
   position: absolute;
@@ -132,24 +161,4 @@ html, body {
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-}
-
-/* 📱 iOS PWA: 強制ポートレートロック・シールド（逆回転相殺版） */
-@media screen and (orientation: landscape) {
-  html, body {
-    width: 100vh !important;
-    height: 100vw !important;
-    overflow: hidden !important;
-  }
-
-  /* 横を向いた瞬間にアプリ全体を-90度回転させて縦画面を維持 */
-  #root {
-    position: fixed !important;
-    top: 50% !important;
-    left: 50% !important;
-    width: 100vh !important;
-    height: 100vw !important;
-    transform: translate(-50%, -50%) rotate(-90deg) !important;
-    transform-origin: center !important;
-  }
 }
