@@ -133,3 +133,32 @@ html, body {
   font-weight: 600;
   cursor: pointer;
 }
+
+/* 📱 iOS向け：横画面の強制ブロック（ポートレートロック） */
+@media screen and (orientation: landscape) {
+  body::before {
+    content: "MA-i は縦画面専用です。\nスマホを縦に持ち直してください。";
+    white-space: pre-wrap;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background-color: #3b82f6; /* MA-iのテーマカラー */
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    font-weight: bold;
+    text-align: center;
+    z-index: 99999;
+    line-height: 1.6;
+    letter-spacing: 0.05em;
+  }
+  
+  /* 横向きの時はアプリ本体の表示と操作を完全に無効化 */
+  #root {
+    display: none !important;
+  }
+}

@@ -22,7 +22,7 @@ export function ChatInput({
 }: ChatInputProps) {
   const [selectedImage, setSelectedImage] = useState<MultimodalImage | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null); // 💡 追加：自動拡張の高さ計算用
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // 💡 既存の機能1：テキストの入力内容に合わせて最大4行（96px）まで高さを動的に自動拡張する
   useEffect(() => {
@@ -94,15 +94,13 @@ export function ChatInput({
     e.target.value = '';
   };
 
-  // 💡 修正：テキストとプレビュー画像を同時に安全に送信するよう統合
   const handleSend = () => {
     onSend(inputText, false, selectedImage || undefined);
-    setSelectedImage(null); // 送信後にプレビューをクリア
-    setInputText('');       // 送信後に入力欄をクリア
+    setSelectedImage(null);
+    setInputText('');
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // PC環境でのEnterキー単体押下時のみ送信（Shift+Enterは改行を許可）
     if (e.key === 'Enter' && !e.shiftKey && window.innerWidth > 768) {
       e.preventDefault();
       if (!disabled && canSend) {
@@ -116,13 +114,13 @@ export function ChatInput({
 
   return (
     <div className="w-full relative flex flex-col gap-3">
-      {/* 🖼️ 画像プレビュー領域（完全維持） */}
+      {/* 🖼️ 画像プレビュー領域 */}
       {selectedImage && (
-        <div className="relative inline-block w-24 h-24 ml-2 animate-in fade-in slide-in-from-bottom-2">
+        <div className="relative inline-block w-24 h-24 ml-4 animate-in fade-in slide-in-from-bottom-2">
           <img 
             src={`data:${selectedImage.mimeType};base64,${selectedImage.base64}`} 
             alt="preview" 
-            className="w-full h-full object-cover rounded-xl border-2 border-slate-200 shadow-md bg-white" 
+            className="w-full h-full object-cover rounded-2xl border-2 border-slate-200 shadow-md bg-white" 
           />
           <button 
             onClick={() => setSelectedImage(null)}
@@ -134,7 +132,8 @@ export function ChatInput({
       )}
 
       {/* ⌨️ テキスト入力（textarea拡張）＆ボタン領域 */}
-      <div className="w-full relative flex items-end group bg-slate-50 border border-slate-200 focus-within:border-blue-300 focus-within:ring-4 focus-within:ring-blue-500/5 rounded-2xl p-2 transition-all shadow-sm">
+      {/* 💡 修正：外枠を rounded-[28px] にして美しいカプセル型に */}
+      <div className="w-full relative flex items-end group bg-slate-50 border border-slate-200 focus-within:border-blue-300 focus-within:ring-4 focus-within:ring-blue-500/5 rounded-[28px] p-2 transition-all shadow-sm">
         <input 
           type="file" 
           accept="image/*" 
@@ -144,17 +143,18 @@ export function ChatInput({
         />
         
         {/* 画像選択ボタン */}
+        {/* 💡 修正：ボタンを完全な円形 (rounded-full) に */}
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled}
-          className={`p-2.5 transition-colors rounded-xl mb-0.5 shrink-0 ${
+          className={`p-2.5 transition-colors rounded-full shrink-0 ${
             selectedImage ? 'text-blue-500 bg-blue-50' : 'text-slate-400 hover:text-blue-500 hover:bg-slate-100'
           } disabled:opacity-50`}
         >
           <ImagePlus size={20} strokeWidth={2} />
         </button>
 
-        {/* 💡 inputからtextareaへ安全に差し替え（最大4行自動拡張） */}
+        {/* 自動拡張テキストエリア */}
         <textarea 
           ref={textareaRef}
           rows={1}
@@ -173,16 +173,17 @@ export function ChatInput({
         />
         
         {/* 送信ボタン */}
+        {/* 💡 修正：ボタンを完全な円形 (rounded-full) に */}
         <button 
           onClick={handleSend}
           disabled={disabled || !canSend}
-          className={`p-2.5 rounded-xl transition-all shadow-sm mb-0.5 shrink-0 ${
+          className={`p-2.5 rounded-full transition-all shadow-sm shrink-0 flex items-center justify-center ${
             disabled || !canSend
               ? 'bg-slate-100 text-slate-300' 
               : 'bg-blue-600 text-white hover:bg-blue-700 active:scale-95'
           }`}
         >
-          <Send size={18} strokeWidth={2.5} />
+          <Send size={18} strokeWidth={2.5} className={canSend && !disabled ? "translate-x-[1px] translate-y-[1px]" : ""} />
         </button>
       </div>
     </div>

@@ -33,7 +33,6 @@ export default function App() {
   const [currentSessionId, setCurrentSessionId] = useState<string>(crypto.randomUUID());
   const [sessionList, setSessionList] = useState<{sessionId: string, title: string}[]>([]);
   
-  // 💡 ログアクションの取得
   const logEvent = useLoggerStore((state: any) => state.logEvent);
   const copyLogsToClipboard = useLoggerStore((state: any) => state.copyLogsToClipboard);
   const clearLogs = useLoggerStore((state: any) => state.clearLogs);
@@ -64,11 +63,11 @@ export default function App() {
       if (data) {
         setSessionList(data.map(s => ({
           sessionId: s.id,
-          title: s.title || '新しいチャット'
+          title: s.title || 'New Session'
         })));
       }
     } catch (error) {
-      console.error('セッション一覧の取得失敗:', error);
+      console.error('Failed to fetch sessions:', error);
     }
   };
 
@@ -87,13 +86,13 @@ export default function App() {
           id: msg.id,
           text: msg.text,
           sender: msg.sender as 'user' | 'ai',
-          time: new Date(msg.created_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }),
+          time: new Date(msg.created_at).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
           imageUrl: msg.image_url || undefined
         })));
       }
       setSidebarOpen(false);
     } catch (error) {
-      console.error('履歴読み込み失敗:', error);
+      console.error('Failed to load history:', error);
     }
   };
 
@@ -124,7 +123,7 @@ export default function App() {
     }
 
     if (messages.length === 0) {
-      const titleSource = targetText.trim() ? targetText : '画像アップロード';
+      const titleSource = targetText.trim() ? targetText : 'Image Upload';
       const tempTitle = titleSource.length > 15 ? titleSource.slice(0, 15) + '...' : titleSource;
       
       const { error: sessionError } = await supabase
@@ -134,7 +133,7 @@ export default function App() {
           title: tempTitle
         });
       if (sessionError && sessionError.code !== '23505') {
-        console.error('⚠️ セッション作成エラー:', sessionError.message);
+        console.error('⚠️ Session creation error:', sessionError.message);
       }
     }
 
@@ -142,7 +141,7 @@ export default function App() {
       id: Date.now().toString(),
       text: targetText,
       sender: 'user',
-      time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }),
+      time: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
       imageUrl: imageToSend ? `data:${imageToSend.mimeType};base64,${imageToSend.base64}` : undefined
     };
     setMessages(prev => [...prev, userMessage]);
@@ -156,7 +155,7 @@ export default function App() {
         id: (Date.now() + 1).toString(),
         text: aiReplyText,
         sender: 'ai',
-        time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+        time: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })
       };
       setMessages(prev => [...prev, aiMessage]);
 
@@ -167,7 +166,7 @@ export default function App() {
       loadSessionList();
 
     } catch (error) {
-      console.error('AI応答エラー:', error);
+      console.error('AI response error:', error);
     } finally {
       setIsThinking(false);
     }
@@ -176,7 +175,7 @@ export default function App() {
   const handleAudioStop = async (audioBlob: Blob, hasSpoken: boolean) => {
     logEvent('recording_stopped', { payload: { reason: 'manual' } });
     if (!hasSpoken) {
-      console.log('無音のため文字起こしをスキップしました');
+      console.log('Skipped transcription due to silence');
       return;
     }
 
@@ -192,7 +191,7 @@ export default function App() {
         handleSend(fixedText, true);
       }
     } catch (error: any) {
-      alert("文字起こしに失敗しました: " + error.message);
+      alert("Transcription failed: " + error.message);
     } finally {
       setIsTranscribing(false);
     }
@@ -234,37 +233,38 @@ export default function App() {
         <div className="absolute inset-0 bg-slate-900/20 z-40 transition-opacity" onClick={() => setSidebarOpen(false)} />
       )}
       
-      {/* 🧭 サイドバー領域 */}
+      {/* 🧭 Sidebar */}
       <div className={`absolute top-0 left-0 h-full w-80 bg-white shadow-2xl z-50 transform transition-transform duration-300 ease-in-out flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex items-center justify-between p-4 border-b border-slate-100">
-          <span className="font-bold text-slate-700 tracking-tight">AI PARTNER</span>
-          <button onClick={() => setSidebarOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 transition-colors">
+          <span className="font-bold text-slate-700 tracking-tight">MA-i</span>
+          <button onClick={() => setSidebarOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 transition-colors rounded-full bg-transparent">
             <X size={20} strokeWidth={2} />
           </button>
         </div>
 
         <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8">
           <div>
+            {/* 💡 修正：アイコンの濃い青 (#1e40af = blue-800) に変更 */}
             <button 
               onClick={handleNewChat}
-              className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-slate-900 text-white rounded-xl hover:bg-slate-800 transition-all shadow-md active:scale-95 mb-8"
+              className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-blue-800 text-white rounded-full hover:bg-blue-900 transition-all shadow-md active:scale-95 mb-8"
             >
               <PlusCircle size={18} />
-              <span className="text-sm font-semibold">新規チャットを始める</span>
+              <span className="text-sm font-semibold">New Session</span>
             </button>
           </div>
 
           {sessionList.length > 0 && (
             <div>
-              <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-4 px-1">過去の会話</h3>
+              <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-4 px-1">Recent Sessions</h3>
               <ul className="space-y-2">
                 {sessionList.map((session) => (
                   <li key={session.sessionId}>
                     <button 
                       onClick={() => loadSpecificSession(session.sessionId)}
-                      className={`w-full flex items-center px-4 py-3 text-sm rounded-xl transition-colors truncate ${
+                      className={`w-full flex items-center px-4 py-3 text-sm rounded-full transition-colors truncate ${
                         currentSessionId === session.sessionId 
-                          ? 'bg-blue-50 text-blue-600 font-bold' 
+                          ? 'bg-blue-50 text-blue-800 font-bold' 
                           : 'text-slate-600 hover:bg-slate-50'
                       }`}
                     >
@@ -277,45 +277,45 @@ export default function App() {
           )}
         </div>
         
-        {/* 💡 移動箇所：サイドバーの最下部にログ検証用のUIを格納 */}
+        {/* Verification Logs UI */}
         <div className="p-4 border-t border-slate-100 bg-slate-50/50 space-y-3">
           <div className="flex items-center gap-2">
             <button 
               onClick={copyLogsToClipboard}
-              className="flex-1 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 text-xs font-bold rounded-xl border border-blue-100 active:scale-95 transition-all text-center"
+              className="flex-1 py-2 bg-blue-50 hover:bg-blue-100 text-blue-800 text-xs font-bold rounded-full border border-blue-100 active:scale-95 transition-all text-center"
             >
-              検証ログをコピー
+              Copy Logs
             </button>
             <button 
-              onClick={() => { if(confirm('蓄積された検証ログをクリアしますか？\n（※会話履歴は削除されません）')) clearLogs(); }}
-              className="px-3 py-2 bg-white hover:bg-slate-100 text-slate-400 text-xs rounded-xl border border-slate-200 active:scale-95 transition-all"
-              title="ログクリア"
+              onClick={() => { if(confirm('Clear diagnostic logs?\n(*Chat history remains intact)')) clearLogs(); }}
+              className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-400 text-xs font-bold rounded-full border border-slate-200 active:scale-95 transition-all"
+              title="Clear Logs"
             >
-              消去
+              Clear
             </button>
           </div>
-          <p className="text-[10px] text-center text-slate-300">© 2026 AI Partner Engine v2.5</p>
+          <p className="text-[10px] text-center text-slate-300">© 2026 MA-i Engine v2.5</p>
         </div>
       </div>
 
-      {/* 💬 メインチャット画面領域 */}
+      {/* 💬 Main Chat Area */}
       <div className="flex-1 flex flex-col h-full bg-slate-50 max-w-4xl mx-auto w-full shadow-inner">
         <header className="flex items-center justify-between px-6 py-4 bg-white/80 backdrop-blur-md border-b border-slate-100 z-10 shrink-0">
-          <button onClick={() => setSidebarOpen(true)} className="p-2 text-slate-500 hover:text-slate-800 transition-colors bg-slate-50 rounded-lg">
+          {/* 💡 修正：ハンバーガーメニューの背景色を削除し完全に透過 */}
+          <button onClick={() => setSidebarOpen(true)} className="p-2 text-slate-500 hover:text-blue-800 transition-colors rounded-full bg-transparent">
             <Menu size={22} strokeWidth={1.5} />
           </button>
           
-          <h1 className="text-sm font-bold text-slate-800 tracking-tighter">PARTNER AI</h1>
+          <h1 className="text-sm font-bold text-slate-800 tracking-tighter">MA-i</h1>
           
-          {/* 右上の不要なボタン領域を完全にクリーン化 */}
           <div className="w-[38px]" />
         </header>
 
         <main className="flex-1 overflow-y-auto overscroll-none p-6 space-y-8 scroll-smooth">
           {showDiagnostic ? (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
-              <button onClick={() => setShowDiagnostic(false)} className="text-xs font-bold text-blue-500 hover:text-blue-700 mb-6 flex items-center bg-blue-50 px-3 py-2 rounded-lg">
-                <X size={14} className="mr-1" /> 診断モードを閉じる
+              <button onClick={() => setShowDiagnostic(false)} className="text-xs font-bold text-blue-500 hover:text-blue-700 mb-6 flex items-center bg-blue-50 px-3 py-2 rounded-full">
+                <X size={14} className="mr-1" /> Close Diagnostics
               </button>
               <AudioDiagnostic />
             </div>
@@ -402,13 +402,14 @@ export default function App() {
               />
 
               <div className="flex flex-col items-center gap-3">
+                {/* 💡 修正：マイクボタンの背景をアイコンの濃い青 (#1e40af = blue-800) に変更 */}
                 <button 
                   onClick={handleMicClick}
                   disabled={isTranscribing || isThinking}
                   className={`w-20 h-20 rounded-full flex items-center justify-center text-white shadow-2xl transition-all duration-300 group relative ${
                     isTranscribing || isThinking ? 'bg-slate-200 cursor-not-allowed' :
                     isRecording ? 'bg-red-500 scale-110 shadow-red-500/40 ring-4 ring-red-50' : 
-                    'bg-slate-900 shadow-slate-900/20 hover:scale-105 active:scale-95 ring-4 ring-slate-50'
+                    'bg-blue-800 shadow-blue-800/30 hover:bg-blue-900 hover:scale-105 active:scale-95 ring-4 ring-blue-50'
                   }`}
                 >
                   {isTranscribing || isThinking ? <Loader2 size={28} className="animate-spin opacity-50" /> : 
@@ -440,7 +441,6 @@ export default function App() {
           </div>
         )}
       </div>
-      {/* 💡 修正箇所：ありもしない画面左下のログパネルを完全除去 */}
     </div>
   );
 }
