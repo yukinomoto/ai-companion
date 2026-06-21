@@ -11,11 +11,9 @@
 html, body {
   margin: 0;
   padding: 0;
-  /* width: 100vw; を 100% に変更 */
   width: 100%;
   height: 100dvh;
   overflow: hidden;
-  /* 横揺れの完全封殺 */
   background: var(--bg-gradient);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   
@@ -30,6 +28,23 @@ html, body {
 
 .hide-scrollbar::-webkit-scrollbar { display: none; }
 .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ==========================================
+   📱 💡 スマホ用：画面回転を完全に封殺する縦画面固定シールド
+   ========================================== */
+@media screen and (min-width: 320px) and (max-width: 960px) and (orientation: landscape) {
+  .portrait-lock {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100dvh !important;
+    height: 100dvw !important;
+    transform: rotate(-90deg);
+    transform-origin: top left;
+    top: 100dvh;
+    left: 0;
+    overflow: hidden;
+  }
+}
 
 /* ==========================================
    UI Components & Animations
@@ -69,19 +84,17 @@ html, body {
 }
 
 /* ==========================================
-   🌟 【復活】テキスト表示モード（構成図の右ボタンと同じ挙動）
+   🌟 【復活】テキスト表示モード
    ========================================== */
-/* 💡 z-index: 150 に設定し、3Dキャラ(1)の手前に完璧な白いシールドを展開。背後の文字ボケを完全防止 */
 .chat-display-overlay {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
-  z-index: 150; /* ヘッダーのすぐ下、3Dキャラの完全に手前 */
+  z-index: 150;
   overflow-y: auto;
-  padding: 100px 24px 130px 24px; /* 上下のヘッダー・入力欄の被り防止 */
+  padding: 100px 24px 130px 24px;
   display: flex;
   flex-direction: column;
   gap: 20px;
-  /* 💡 構成図通り、キャラが透けて見える美しいすりガラスカード（白透过） */
   background: rgba(255, 255, 255, 0.6);
   backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
 }

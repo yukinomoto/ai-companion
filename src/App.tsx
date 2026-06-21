@@ -1,10 +1,9 @@
 // src/App.tsx
 import { useState, useEffect, useRef } from 'react';
 import { 
-  Menu, X, Mic, Activity, Square, Volume2, Loader2, PlusCircle
+  Menu, X, Mic, Square, Volume2, Loader2, PlusCircle
 } from 'lucide-react';
 import { useLoggerStore, initLoggerObserver } from './store/useLoggerStore';
-import { DebugPanel } from './components/DebugPanel';
 import { AudioDiagnostic } from './components/AudioDiagnostic';
 import { audioService } from './services/audioService';
 import { sttService } from './services/sttService';
@@ -33,7 +32,12 @@ export default function App() {
   
   const [currentSessionId, setCurrentSessionId] = useState<string>(crypto.randomUUID());
   const [sessionList, setSessionList] = useState<{sessionId: string, title: string}[]>([]);
+  
+  // 💡 ログアクションの取得
   const logEvent = useLoggerStore((state: any) => state.logEvent);
+  const copyLogsToClipboard = useLoggerStore((state: any) => state.copyLogsToClipboard);
+  const clearLogs = useLoggerStore((state: any) => state.clearLogs);
+  
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const gcloudApiKey = import.meta.env.VITE_GOOGLE_CLOUD_API_KEY;
@@ -71,7 +75,6 @@ export default function App() {
   const loadSpecificSession = async (targetSessionId: string) => {
     try {
       setCurrentSessionId(targetSessionId);
-      // 💡 修正：テーブルから image_url も合わせて取得する
       const { data, error } = await supabase
         .from('chat_messages')
         .select('id, text, sender, created_at, image_url')
@@ -85,7 +88,7 @@ export default function App() {
           text: msg.text,
           sender: msg.sender as 'user' | 'ai',
           time: new Date(msg.created_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }),
-          imageUrl: msg.image_url || undefined // 💡 過去の保存済みURLをマッピング
+          imageUrl: msg.image_url || undefined
         })));
       }
       setSidebarOpen(false);
@@ -225,12 +228,13 @@ export default function App() {
   };
 
   return (
-    <div className="fixed inset-0 w-full flex bg-slate-50 font-sans text-slate-800 overflow-hidden overscroll-none">
+    <div className="fixed inset-0 w-full flex bg-slate-50 font-sans text-slate-800 overflow-hidden overscroll-none portrait-lock">
       
       {isSidebarOpen && (
         <div className="absolute inset-0 bg-slate-900/20 z-40 transition-opacity" onClick={() => setSidebarOpen(false)} />
       )}
       
+      {/* 🧭 サイドバー領域 */}
       <div className={`absolute top-0 left-0 h-full w-80 bg-white shadow-2xl z-50 transform transition-transform duration-300 ease-in-out flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex items-center justify-between p-4 border-b border-slate-100">
           <span className="font-bold text-slate-700 tracking-tight">AI PARTNER</span>
@@ -271,28 +275,30 @@ export default function App() {
               </ul>
             </div>
           )}
-
-          <div>
-            <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-4 px-1">メンテナンス</h3>
-            <ul className="space-y-2">
-              <li>
-                <button 
-                  onClick={() => { setSidebarOpen(false); setShowDiagnostic(!showDiagnostic); }}
-                  className="w-full flex items-center px-4 py-3 text-sm text-slate-600 hover:bg-slate-50 rounded-xl transition-colors group"
-                >
-                  <Activity size={18} className="text-slate-400 group-hover:text-blue-500 mr-3" />
-                  <span>音声診断モード</span>
-                </button>
-              </li>
-            </ul>
-          </div>
         </div>
         
-        <div className="p-4 border-t border-slate-50">
+        {/* 💡 移動箇所：サイドバーの最下部にログ検証用のUIを格納 */}
+        <div className="p-4 border-t border-slate-100 bg-slate-50/50 space-y-3">
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={copyLogsToClipboard}
+              className="flex-1 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 text-xs font-bold rounded-xl border border-blue-100 active:scale-95 transition-all text-center"
+            >
+              検証ログをコピー
+            </button>
+            <button 
+              onClick={() => { if(confirm('蓄積された検証ログをクリアしますか？\n（※会話履歴は削除されません）')) clearLogs(); }}
+              className="px-3 py-2 bg-white hover:bg-slate-100 text-slate-400 text-xs rounded-xl border border-slate-200 active:scale-95 transition-all"
+              title="ログクリア"
+            >
+              消去
+            </button>
+          </div>
           <p className="text-[10px] text-center text-slate-300">© 2026 AI Partner Engine v2.5</p>
         </div>
       </div>
 
+      {/* 💬 メインチャット画面領域 */}
       <div className="flex-1 flex flex-col h-full bg-slate-50 max-w-4xl mx-auto w-full shadow-inner">
         <header className="flex items-center justify-between px-6 py-4 bg-white/80 backdrop-blur-md border-b border-slate-100 z-10 shrink-0">
           <button onClick={() => setSidebarOpen(true)} className="p-2 text-slate-500 hover:text-slate-800 transition-colors bg-slate-50 rounded-lg">
@@ -301,6 +307,7 @@ export default function App() {
           
           <h1 className="text-sm font-bold text-slate-800 tracking-tighter">PARTNER AI</h1>
           
+          {/* 右上の不要なボタン領域を完全にクリーン化 */}
           <div className="w-[38px]" />
         </header>
 
@@ -350,7 +357,7 @@ export default function App() {
                         className={`flex items-center gap-1.5 ml-4 px-3 py-1 rounded-full transition-all border ${
                           playingMessageId === msg.id 
                             ? 'bg-blue-50 border-blue-100 text-blue-500' 
-                            : 'bg-white border-slate-100 text-slate-400 hover:text-blue-500 hover:border-blue-100'
+                            : 'bg-white border border-slate-100 text-slate-400 hover:text-blue-500 hover:border-blue-100'
                         }`}
                       >
                         {playingMessageId === msg.id ? (
@@ -433,7 +440,7 @@ export default function App() {
           </div>
         )}
       </div>
-      <DebugPanel />
+      {/* 💡 修正箇所：ありもしない画面左下のログパネルを完全除去 */}
     </div>
   );
 }

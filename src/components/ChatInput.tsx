@@ -1,5 +1,5 @@
 // src/components/ChatInput.tsx
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Send, ImagePlus, X } from 'lucide-react';
 import { type MultimodalImage } from '../services/chatService';
 
@@ -22,8 +22,19 @@ export function ChatInput({
 }: ChatInputProps) {
   const [selectedImage, setSelectedImage] = useState<MultimodalImage | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null); // 💡 追加：自動拡張の高さ計算用
 
-  // 💡 追加：画像をブラウザ側で綺麗にリサイズ・圧縮する処理
+  // 💡 既存の機能1：テキストの入力内容に合わせて最大4行（96px）まで高さを動的に自動拡張する
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = 'auto'; // 一度リセット
+    const nextHeight = Math.min(textarea.scrollHeight, 96); // 最大4行相当(96px)に制限
+    textarea.style.height = `${nextHeight}px`;
+  }, [inputText]);
+
+  // 💡 既存の機能2：画像をブラウザ側で綺麗にリサイズ・圧縮する処理（完全維持）
   const compressImage = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -31,7 +42,6 @@ export function ChatInput({
         const img = new Image();
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          // Geminiが十分に認識できて、かつ容量が軽いベストなサイズ（最大1024px）
           const MAX_SIZE = 1024;
           let width = img.width;
           let height = img.height;
@@ -54,7 +64,6 @@ export function ChatInput({
           if (!ctx) return reject('Canvas rendering failed');
           
           ctx.drawImage(img, 0, 0, width, height);
-          // 画質を80%にして軽量なJPEGに変換（これで数MBの画像が数百KBになります）
           const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
           resolve(dataUrl);
         };
@@ -70,25 +79,36 @@ export function ChatInput({
     if (!file) return;
 
     try {
-      // 💡 圧縮処理を実行
       const compressedDataUrl = await compressImage(file);
       const base64 = compressedDataUrl.split(',')[1];
       
       setSelectedImage({
         base64,
-        mimeType: 'image/jpeg', // 圧縮時にJPEGに統一
+        mimeType: 'image/jpeg',
       });
     } catch (error) {
       console.error('画像圧縮エラー:', error);
       alert('画像の処理に失敗しました。');
     }
     
-    e.target.value = ''; // 連続で同じ画像を選べるようにリセット
+    e.target.value = '';
   };
 
+  // 💡 修正：テキストとプレビュー画像を同時に安全に送信するよう統合
   const handleSend = () => {
-    onSend(undefined, false, selectedImage || undefined);
+    onSend(inputText, false, selectedImage || undefined);
     setSelectedImage(null); // 送信後にプレビューをクリア
+    setInputText('');       // 送信後に入力欄をクリア
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // PC環境でのEnterキー単体押下時のみ送信（Shift+Enterは改行を許可）
+    if (e.key === 'Enter' && !e.shiftKey && window.innerWidth > 768) {
+      e.preventDefault();
+      if (!disabled && canSend) {
+        handleSend();
+      }
+    }
   };
 
   const disabled = isRecording || isTranscribing || isThinking;
@@ -96,7 +116,7 @@ export function ChatInput({
 
   return (
     <div className="w-full relative flex flex-col gap-3">
-      {/* 🖼️ 画像プレビュー領域 */}
+      {/* 🖼️ 画像プレビュー領域（完全維持） */}
       {selectedImage && (
         <div className="relative inline-block w-24 h-24 ml-2 animate-in fade-in slide-in-from-bottom-2">
           <img 
@@ -113,11 +133,11 @@ export function ChatInput({
         </div>
       )}
 
-      {/* ⌨️ テキスト入力＆ボタン領域 */}
-      <div className="w-full relative flex items-center group">
+      {/* ⌨️ テキスト入力（textarea拡張）＆ボタン領域 */}
+      <div className="w-full relative flex items-end group bg-slate-50 border border-slate-200 focus-within:border-blue-300 focus-within:ring-4 focus-within:ring-blue-500/5 rounded-2xl p-2 transition-all shadow-sm">
         <input 
           type="file" 
-          accept="image/*" // iPhoneからHEICなども選べるように拡張
+          accept="image/*" 
           className="hidden" 
           ref={fileInputRef} 
           onChange={handleFileChange} 
@@ -127,15 +147,17 @@ export function ChatInput({
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled}
-          className={`absolute left-2 p-2.5 transition-colors z-10 rounded-xl ${
+          className={`p-2.5 transition-colors rounded-xl mb-0.5 shrink-0 ${
             selectedImage ? 'text-blue-500 bg-blue-50' : 'text-slate-400 hover:text-blue-500 hover:bg-slate-100'
           } disabled:opacity-50`}
         >
           <ImagePlus size={20} strokeWidth={2} />
         </button>
 
-        <input 
-          type="text"
+        {/* 💡 inputからtextareaへ安全に差し替え（最大4行自動拡張） */}
+        <textarea 
+          ref={textareaRef}
+          rows={1}
           placeholder={
             isTranscribing ? "Transcribing voice..." :
             isThinking ? "Thinking..." :
@@ -143,12 +165,10 @@ export function ChatInput({
           }
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && !disabled && canSend && handleSend()}
+          onKeyDown={handleKeyDown}
           disabled={disabled}
-          className={`w-full bg-slate-50 border rounded-2xl py-4 pl-14 pr-14 text-[16px] text-slate-700 focus:outline-none transition-all shadow-sm ${
-            isTranscribing || isThinking 
-              ? 'border-blue-200 bg-blue-50/30 text-blue-400 italic' 
-              : 'border-slate-200 focus:border-blue-300 focus:ring-4 focus:ring-blue-500/5'
+          className={`flex-1 max-h-24 bg-transparent border-none outline-none resize-none text-[16px] text-slate-700 py-2.5 px-3 font-sans leading-normal hide-scrollbar selectable-text ${
+            isTranscribing || isThinking ? 'text-blue-400 italic' : ''
           }`}
         />
         
@@ -156,7 +176,7 @@ export function ChatInput({
         <button 
           onClick={handleSend}
           disabled={disabled || !canSend}
-          className={`absolute right-2 p-2.5 rounded-xl transition-all shadow-sm ${
+          className={`p-2.5 rounded-xl transition-all shadow-sm mb-0.5 shrink-0 ${
             disabled || !canSend
               ? 'bg-slate-100 text-slate-300' 
               : 'bg-blue-600 text-white hover:bg-blue-700 active:scale-95'
