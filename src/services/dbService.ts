@@ -88,10 +88,20 @@ export const dbService = {
   },
   
   // 🕸️ ナレッジグラフ関連のDB操作
-  getPhraseCorrections: async (): Promise<{alias_phrase: string, canonical_phrase: string}[]> => {
-    const { data, error } = await supabase.from('v_phrase_corrections').select('alias_phrase, canonical_phrase');
-    if (error) { console.error("置換辞書取得失敗:", error); return []; }
-    return data || [];
+  getPhraseCorrections: async (): Promise<{ pairs: {alias_phrase: string, canonical_phrase: string}[], hints: string[] }> => {
+    // 💡 既存のビュー（ペア）と、単体ワード（ヒント）を同時に取得
+    const [pairsResult, hintsResult] = await Promise.all([
+      supabase.from('v_phrase_corrections').select('alias_phrase, canonical_phrase'),
+      supabase.from('phrase_nodes').select('phrase').in('type', ['canonical', 'concept']).order('mention_count', { ascending: false })
+    ]);
+
+    if (pairsResult.error) console.error("置換辞書取得失敗:", pairsResult.error);
+    if (hintsResult.error) console.error("単体ヒント取得失敗:", hintsResult.error);
+
+    return {
+      pairs: pairsResult.data || [],
+      hints: (hintsResult.data || []).map(row => row.phrase)
+    };
   },
 
   getKnowledgeNetwork: async (): Promise<{word_a: string, word_b: string}[]> => {
@@ -101,7 +111,8 @@ export const dbService = {
   },
 
   savePhraseNetwork: async (nodes: any[], edges: any[]): Promise<void> => {
-    const { error } = await supabase.rpc('save_phrase_network_v2', { p_nodes: nodes, p_edges: edges });
+    // 💡 修正: 復元した安全な v3 の関数を呼び出すように変更
+    const { error } = await supabase.rpc('save_phrase_network_v3', { p_nodes: nodes, p_edges: edges });
     if (error) console.error("ナレッジグラフ保存失敗:", error);
   },
 

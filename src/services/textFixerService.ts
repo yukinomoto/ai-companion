@@ -14,22 +14,21 @@ export const textFixerService = {
     if (!rawText.trim()) return rawText;
     const logEvent = useLoggerStore.getState().logEvent;
 
-    let correctionPairs: string[] = [];
-
-    // 1. dbService経由で辞書取得
-    const data = await dbService.getPhraseCorrections();
-    correctionPairs = data.map(item => `・「${item.alias_phrase}」と聞こえたら「${item.canonical_phrase}」に強制置換する`);
-
+    // 1. dbService経由で辞書取得（ペアと単体ヒントの両方を受け取る）
+    const { pairs, hints } = await dbService.getPhraseCorrections();
+    
     // 2. Groq API で補正
     try {
-      const dictionaryString = correctionPairs.length > 0 
-        ? `\n【強制置換辞書】\n${correctionPairs.join('\n')}` 
-        : '';
+      // 💡 ペアによる絶対ルールと、単独ワードによる推測ヒントの2段構えで辞書テキストを構築
+      const pairStrings = pairs.map(p => `・「${p.alias_phrase}」と聞こえたら「${p.canonical_phrase}」に強制置換する`);
+      const rulesText = pairStrings.length > 0 ? `\n【強制置換ルール】\n${pairStrings.join('\n')}` : '';
+      const hintsText = hints.length > 0 ? `\n【頻出ワード（この表記・漢字を優先的に当てはめてください）】\n${hints.join(', ')}` : '';
+      
+      const dictionaryString = rulesText + hintsText;
       const systemPrompt = `${SYSTEM_PROMPTS.TEXT_FIXER}${dictionaryString}`;
 
       // 🛡️ シールド発動：Groqの通信をラッパーで保護
       const fixedText = await apiWrapper.execute('GROQ', false, async () => {
-        // 💡 引数の apiKey ではなく、リトライ時に自動で切り替わる apiConfig の最新キーを使用する
         const currentGroqKey = apiConfig.getGroqApiKey();
         if (!currentGroqKey) throw new Error('Groq API Key is missing');
 
@@ -37,7 +36,7 @@ export const textFixerService = {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${currentGroqKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: API_MODELS.GROQ.TEXT_FIXER, // 💡 定数を利用
+            model: API_MODELS.GROQ.TEXT_FIXER,
             messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: rawText }],
             temperature: TEMPERATURE,
             max_tokens: MAX_TOKENS
@@ -45,7 +44,6 @@ export const textFixerService = {
         });
 
         if (!response.ok) {
-          // 429エラー等をラッパーに検知させるためにステータスを付与してthrow
           throw Object.assign(new Error(`Groq Error: ${response.status}`), { status: response.status });
         }
 
@@ -60,7 +58,7 @@ export const textFixerService = {
       return rawText;
     } catch (error: any) {
       logEvent('audio_play_error', { error_message: `Text Fixer Failed: ${error.message}` });
-      return rawText; // エラー時（セカンダリキーも枯渇等）は元のテキストをそのまま返す（フェイルセーフ）
+      return rawText; 
     }
   }
 };
