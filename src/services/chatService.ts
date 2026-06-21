@@ -11,29 +11,71 @@ const MATCH_THRESHOLD = 0.3;
 const MATCH_COUNT = 5;
 const HISTORY_LIMIT = 6;
 
-// 💡 画像データの型を定義
 export interface MultimodalImage {
   base64: string;
   mimeType: string;
 }
 
+// 💡 補助関数: Base64文字列をBlobデータに変換する
+const base64ToBlob = (base64: string, mimeType: string): Blob => {
+  const byteCharacters = atob(base64);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const byteArray = new Uint8Array(byteNumbers);
+  return new Blob([byteArray], { type: mimeType });
+};
+
+// 💡 補助関数: 画像をSupabase Storageにアップロードして公開URLを取得する
+const uploadImageToStorage = async (image: MultimodalImage, sessionId: string): Promise<string | null> => {
+  try {
+    const blob = base64ToBlob(image.base64, image.mimeType);
+    // セッションごとにフォルダを分け、一意のファイル名を生成
+    const fileName = `${sessionId}/${Date.now()}.jpg`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('chat-images')
+      .upload(fileName, blob, {
+        contentType: image.mimeType,
+        upsert: true
+      });
+
+    if (uploadError) throw uploadError;
+
+    // アップロードしたファイルの公開URLを取得
+    const { data: publicUrlData } = supabase.storage
+      .from('chat-images')
+      .getPublicUrl(fileName);
+
+    return publicUrlData.publicUrl;
+  } catch (error) {
+    console.error('⚠️ Supabase Storageへの画像アップロードに失敗しました:', error);
+    return null;
+  }
+};
+
 export const chatService = {
-  // 💡 引数に image を追加
   sendMessage: async (userText: string, sessionId: string, image?: MultimodalImage): Promise<string> => {
     try {
-      // 1. ユーザーのメッセージを現在のセッションに保存
-      // ※画像自体はDB（chat_messages）に保存せず、テキストのみ残す設計がセオリー（容量節約のため）
+      // 💡 画像が存在する場合はSupabase Storageへアップロード処理を実行
+      let publicImageUrl: string | null = null;
+      if (image) {
+        publicImageUrl = await uploadImageToStorage(image, sessionId);
+      }
+
+      // 💡 image_url カラムをインサートに対象追加
       await supabase.from('chat_messages').insert({ 
         sender: 'user', 
         text: image ? `[画像を送信しました] ${userText}` : userText, 
-        session_id: sessionId 
+        session_id: sessionId,
+        image_url: publicImageUrl // データベースへURLを永続保存
       });
 
       let webContext = '';
       let memoryContext = '';
       let chatHistoryStr = '';
 
-      // 2. Groqによる意図判定 (Intent Routing)
       if (apiConfig.getGroqApiKey()) {
         try {
           const intent = await apiWrapper.execute('GROQ', false, async () => {
@@ -60,7 +102,6 @@ export const chatService = {
             return JSON.parse(groqData.choices[0].message.content);
           });
 
-          // 3. 検索が必要ならTavilyで検索
           if (intent.requires_search && intent.search_query && apiConfig.getTavilyApiKey()) {
             await apiWrapper.execute('TAVILY', false, async () => {
               const currentTavilyKey = apiConfig.getTavilyApiKey();
@@ -85,7 +126,6 @@ export const chatService = {
         }
       }
 
-      // 3.2 直近の会話履歴（短期記憶）の取得
       try {
         const { data: recentMessages, error: historyError } = await supabase
           .from('chat_messages')
@@ -103,7 +143,6 @@ export const chatService = {
         console.error('履歴取得エラー:', e);
       }
 
-      // 3.5 記憶の引き出し（ベクトル検索）
       try {
         if (apiConfig.getGeminiApiKey()) {
           const userVector = await apiWrapper.execute('GEMINI', false, async () => {
@@ -142,25 +181,19 @@ export const chatService = {
       
       const systemPrompt = `${SYSTEM_PROMPTS.CHAT_MODE}${memoryPrompt}${searchPrompt}${historyPrompt}\n\n【絶対厳守：現時点のリアルタイム日時】\n現在の正確な日時は 【 ${currentDateStr} 】 です。過去のチャット履歴に書かれている曜日や時間に引きずられたり、話を合わせたりすることは【絶対に禁止】します。常にこのリアルタイム日時だけを「今」の前提として発言してください。`;
 
-      // 4. メイン脳（Gemini）の返答生成
-      // 💡 画像がある場合は isMultimodal を true にしてシールドを発動させる
       const isMultimodal = !!image;
       
       const aiText = await apiWrapper.execute('GEMINI', isMultimodal, async () => {
-        // 画像がある場合はマルチモーダル用のモデル（flash）、無ければ通常のテキスト用モデル（flash-lite）を使う
         const modelName = isMultimodal ? API_MODELS.GEMINI.MULTIMODAL : API_MODELS.GEMINI.PRIMARY;
-        
-        // 💡 セカンダリ分離: 画像がある場合は強制的にセカンダリキー（バックアップ）を使用する
-        const apiKey = isMultimodal 
-          ? import.meta.env.VITE_GEMINI_API_KEY_SECONDARY || apiConfig.getGeminiApiKey() 
-          : apiConfig.getGeminiApiKey();
+        const apiKey = isMultimodal ? apiConfig.getGeminiMultimodalKey() : apiConfig.getGeminiApiKey();
+
+        if (!apiKey) {
+          throw new Error(isMultimodal ? 'マルチモーダル用のAPIキーが設定されていません。' : 'APIキーが設定されていません。');
+        }
 
         const ai = new GoogleGenAI({ apiKey });
-
-        // 送信するコンテンツの配列を作成
         const contentsParts: any[] = [{ text: systemPrompt }];
         
-        // 画像が存在する場合はパートに追加する
         if (image) {
           contentsParts.push({
             inlineData: {
@@ -185,10 +218,8 @@ export const chatService = {
         return response.text || 'ごめんなさい、ちょっと考え込んでしまいました。';
       });
 
-      // 5. AIのメッセージを保存
       await supabase.from('chat_messages').insert({ sender: 'ai', text: aiText, session_id: sessionId });
 
-      // 6. 裏側で記憶処理を非同期実行
       memoryExtractor.processConversation(userText, aiText).catch(console.error);
       phraseExtractor.processL2Phrases(userText, aiText, sessionId).catch(console.error);
 
@@ -196,7 +227,6 @@ export const chatService = {
 
     } catch (error: any) {
       console.error('チャット生成エラー:', error);
-      // ラッパーからの「マルチモーダル制限」メッセージはそのままUIに返す
       if (error.message?.includes('MULTIMODAL_LIMIT_REACHED')) {
         return error.message.replace('MULTIMODAL_LIMIT_REACHED:', '');
       }

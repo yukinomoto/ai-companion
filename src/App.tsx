@@ -10,16 +10,16 @@ import { audioService } from './services/audioService';
 import { sttService } from './services/sttService';
 import { useAudioPipeline } from './hooks/useAudioPipeline';
 import { supabase } from './lib/supabase';
-import { chatService, type MultimodalImage } from './services/chatService'; // 💡 型をインポート
+import { chatService, type MultimodalImage } from './services/chatService';
 import { textFixerService } from './services/textFixerService';
-import { ChatInput } from './components/ChatInput'; // 💡 コンポーネントをインポート
+import { ChatInput } from './components/ChatInput';
 
 interface Message {
   id: string;
   text: string;
   sender: 'user' | 'ai';
   time: string;
-  imageUrl?: string; // 💡 画面表示用の画像URLを追加
+  imageUrl?: string;
 }
 
 export default function App() {
@@ -71,9 +71,10 @@ export default function App() {
   const loadSpecificSession = async (targetSessionId: string) => {
     try {
       setCurrentSessionId(targetSessionId);
+      // 💡 修正：テーブルから image_url も合わせて取得する
       const { data, error } = await supabase
         .from('chat_messages')
-        .select('*')
+        .select('id, text, sender, created_at, image_url')
         .eq('session_id', targetSessionId)
         .order('created_at', { ascending: true });
       if (error) throw error;
@@ -83,7 +84,8 @@ export default function App() {
           id: msg.id,
           text: msg.text,
           sender: msg.sender as 'user' | 'ai',
-          time: new Date(msg.created_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+          time: new Date(msg.created_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }),
+          imageUrl: msg.image_url || undefined // 💡 過去の保存済みURLをマッピング
         })));
       }
       setSidebarOpen(false);
@@ -110,7 +112,6 @@ export default function App() {
     }
   };
 
-  // 💡 引数に imageToSend を追加し、画像のみの送信も許可
   const handleSend = async (textToSend?: string, isVoice: boolean = false, imageToSend?: MultimodalImage) => {
     const targetText = textToSend || inputText;
     if (!targetText.trim() && !imageToSend) return; 
@@ -139,7 +140,7 @@ export default function App() {
       text: targetText,
       sender: 'user',
       time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }),
-      imageUrl: imageToSend ? `data:${imageToSend.mimeType};base64,${imageToSend.base64}` : undefined // 💡 画面表示用のURL
+      imageUrl: imageToSend ? `data:${imageToSend.mimeType};base64,${imageToSend.base64}` : undefined
     };
     setMessages(prev => [...prev, userMessage]);
     setInputText(''); 
@@ -147,7 +148,6 @@ export default function App() {
     
     logEvent('diagnostic_run', { payload: { action: 'text_sent', hasImage: !!imageToSend } });
     try {
-      // 💡 chatService に画像を渡す
       const aiReplyText = await chatService.sendMessage(targetText, currentSessionId, imageToSend);
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -181,11 +181,11 @@ export default function App() {
 
     setIsTranscribing(true);
     try {
-      const transcribedText = await sttService.transcribe(audioBlob); // 💡 キーを渡さない
+      const transcribedText = await sttService.transcribe(audioBlob);
       logEvent('stt_response_received', { payload: { text: transcribedText } });
       
       if (transcribedText) {
-        const fixedText = await textFixerService.fixText(transcribedText); // 💡 キーを渡さない
+        const fixedText = await textFixerService.fixText(transcribedText);
         handleSend(fixedText, true);
       }
     } catch (error: any) {
@@ -330,12 +330,11 @@ export default function App() {
                       ? 'bg-blue-600 text-white rounded-tr-none' 
                       : 'bg-white border border-slate-100 text-slate-700 rounded-tl-none'
                   }`}>
-                    {/* 💡 画像があればテキストの上に描画 */}
                     {msg.imageUrl && (
                       <img 
                         src={msg.imageUrl} 
                         alt="Uploaded" 
-                        className="w-full max-w-[240px] rounded-xl mb-2 object-cover border border-white/20 shadow-sm" 
+                        className="w-full max-w-[240px] rounded-xl mb-2 object-cover border border-white/20 shadow-sm bg-slate-100" 
                       />
                     )}
                     {msg.text}
@@ -386,7 +385,6 @@ export default function App() {
           <div className="w-full bg-white/80 backdrop-blur-lg border-t border-slate-100 p-6 shrink-0 shadow-2xl">
             <div className="max-w-2xl mx-auto flex flex-col items-center gap-6">
               
-              {/* 💡 コンポーネント化した入力欄をここに配置 */}
               <ChatInput 
                 inputText={inputText}
                 setInputText={setInputText}

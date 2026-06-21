@@ -5,8 +5,8 @@
 // ==========================================
 export const API_MODELS = {
   GEMINI: {
-    PRIMARY: 'gemini-2.0-flash-lite',
-    MULTIMODAL: 'gemini-2.0-flash',
+    PRIMARY: 'gemini-3.1-flash-lite',
+    MULTIMODAL: 'gemini-3.5-flash',
   },
   GROQ: {
     L2_EXTRACTOR: 'llama-3.1-8b-instant',
@@ -47,7 +47,12 @@ const depletionFlags = {
 };
 
 export const apiConfig = {
+  // 通常チャット用（枯渇時にセカンダリへ自動切り替え）
   getGeminiApiKey: (): string => depletionFlags.GEMINI ? API_KEYS.GEMINI.SECONDARY : API_KEYS.GEMINI.PRIMARY,
+  
+  // マルチモーダル専用（常にセカンダリのみを使用）
+  getGeminiMultimodalKey: (): string => API_KEYS.GEMINI.SECONDARY,
+  
   getGroqApiKey: (): string => depletionFlags.GROQ ? API_KEYS.GROQ.SECONDARY : API_KEYS.GROQ.PRIMARY,
   getTavilyApiKey: (): string => depletionFlags.TAVILY ? API_KEYS.TAVILY.SECONDARY : API_KEYS.TAVILY.PRIMARY,
   getGoogleTtsApiKey: (): string => API_KEYS.GOOGLE_TTS,
