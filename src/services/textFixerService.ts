@@ -28,7 +28,7 @@ export const textFixerService = {
       const systemPrompt = `${SYSTEM_PROMPTS.TEXT_FIXER}${dictionaryString}`;
 
       // 🛡️ シールド発動：Groqの通信をラッパーで保護
-      const fixedText = await apiWrapper.execute('GROQ', false, async () => {
+      const rawContent = await apiWrapper.execute('GROQ', false, async () => {
         const currentGroqKey = apiConfig.getGroqApiKey();
         if (!currentGroqKey) throw new Error('Groq API Key is missing');
 
@@ -48,8 +48,26 @@ export const textFixerService = {
         }
 
         const resData = await response.json();
-        return resData.choices?.[0]?.message?.content?.trim();
+        // 💡 変更: APIからは生のテキスト（rawContent）として一旦受け取る
+        return resData.choices?.[0]?.message?.content || "";
       });
+
+      // 💡 追加: 正規表現で <fixed> タグの中身だけを抽出
+      const match = rawContent.match(/<fixed>([\s\S]*?)<\/fixed>/);
+      let fixedText = "";
+      
+      if (match && match[1]) {
+        fixedText = match[1].trim();
+      } else {
+        // 万が一LLMがタグを忘れた場合のフォールバック
+        fixedText = rawContent.replace(/<fixed>|<\/fixed>/g, '').trim();
+      }
+
+      // 💡 追加: 念のための長文暴走チェック（原文の1.5倍+10文字以上の長さになっていたら暴走とみなす）
+      if (fixedText.length > rawText.length * 1.5 + 10) {
+        console.warn("TEXT_FIXER 暴走検知: 長文が生成されたため原文を採用します", fixedText);
+        fixedText = rawText; // 暴走時は安全のため原文にフォールバック
+      }
 
       if (fixedText) {
         logEvent('diagnostic_run', { payload: { note: 'Text Fixed', original: rawText, fixed: fixedText } });
