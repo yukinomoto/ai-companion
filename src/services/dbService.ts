@@ -1,11 +1,6 @@
 // src/services/dbService.ts
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../lib/supabase';
 import type { Message, ChatSession, LongTermMemory, FollowUp, UserDictionary, Interest, GreetingPool } from '../types';
-
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export const dbService = {
   getSessions: async (): Promise<ChatSession[]> => {
@@ -90,5 +85,28 @@ export const dbService = {
   
   saveInterest: async (topic: string) => {
     await supabase.from('interests').insert([{ topic }]);
-  }
+  },
+  
+  // 🕸️ ナレッジグラフ関連のDB操作
+  getPhraseCorrections: async (): Promise<{alias_phrase: string, canonical_phrase: string}[]> => {
+    const { data, error } = await supabase.from('v_phrase_corrections').select('alias_phrase, canonical_phrase');
+    if (error) { console.error("置換辞書取得失敗:", error); return []; }
+    return data || [];
+  },
+
+  getKnowledgeNetwork: async (): Promise<{word_a: string, word_b: string}[]> => {
+    const { data, error } = await supabase.from('v_phrase_knowledge_network').select('word_a, word_b');
+    if (error) { console.error("知識ネットワーク取得失敗:", error); return []; }
+    return data || [];
+  },
+
+  savePhraseNetwork: async (nodes: any[], edges: any[]): Promise<void> => {
+    const { error } = await supabase.rpc('save_phrase_network_v2', { p_nodes: nodes, p_edges: edges });
+    if (error) console.error("ナレッジグラフ保存失敗:", error);
+  },
+
+  updateSessionTitle: async (sessionId: string, title: string): Promise<void> => {
+    const { error } = await supabase.from('chat_sessions').update({ title }).eq('id', sessionId);
+    if (error) console.error("タイトル更新失敗:", error);
+  },
 };

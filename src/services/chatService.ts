@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 import { memoryExtractor } from './memoryExtractor';
 import { phraseExtractor } from './phraseExtractor';
 import { SYSTEM_PROMPTS } from '../prompts';
@@ -92,7 +92,6 @@ export const chatService = {
           chatHistoryStr = recentMessages.reverse().map(m => 
             `${m.sender === 'user' ? 'ユーザー' : 'AI'}: ${m.text}`
           ).join('\n');
-          console.log('💬 短期記憶を読み込みました:\n', chatHistoryStr);
         }
       } catch (e) {
         console.error('履歴取得エラー:', e);
@@ -150,6 +149,15 @@ export const chatService = {
       const response = await ai.models.generateContent({
         model: 'gemini-3.1-flash-lite',
         contents: systemPrompt,
+        config: {
+          // 💡 インポートした専用の型（Enum）を使ってフィルターを無効化
+          safetySettings: [
+            { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+          ]
+        }
       });
       
       const aiText = response.text || 'ごめんなさい、ちょっと考え込んでしまいました。';

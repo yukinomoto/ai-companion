@@ -11,7 +11,7 @@ import { sttService } from './services/sttService';
 import { useAudioPipeline } from './hooks/useAudioPipeline';
 import { supabase } from './lib/supabase';
 import { chatService } from './services/chatService';
-import { titleGenerator } from './services/titleGenerator';
+import { textFixerService } from './services/textFixerService';
 
 interface Message {
   id: string;
@@ -31,13 +31,11 @@ export default function App() {
   
   const [currentSessionId, setCurrentSessionId] = useState<string>(crypto.randomUUID());
   const [sessionList, setSessionList] = useState<{sessionId: string, title: string}[]>([]);
-  
   const logEvent = useLoggerStore((state: any) => state.logEvent);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const gcloudApiKey = import.meta.env.VITE_GOOGLE_CLOUD_API_KEY;
   const groqApiKey = import.meta.env.VITE_GROQ_API_KEY;
-
   const [messages, setMessages] = useState<Message[]>([]);
 
   useEffect(() => {
@@ -51,12 +49,10 @@ export default function App() {
 
   const loadSessionList = async () => {
     try {
-      // 💡 NEW: chat_sessionsテーブルから直接IDとタイトルを取得する
       const { data, error } = await supabase
         .from('chat_sessions')
         .select('id, title, created_at')
         .order('created_at', { ascending: false });
-
       if (error) throw error;
       
       if (data) {
@@ -78,7 +74,6 @@ export default function App() {
         .select('*')
         .eq('session_id', targetSessionId)
         .order('created_at', { ascending: true });
-
       if (error) throw error;
 
       if (data) {
@@ -113,7 +108,6 @@ export default function App() {
     }
   };
 
-  // 💡 引数に isVoice: boolean を追加
   const handleSend = async (textToSend?: string, isVoice: boolean = false) => {
     const targetText = textToSend || inputText;
     if (!targetText.trim()) return;
@@ -134,12 +128,10 @@ export default function App() {
           id: currentSessionId,
           title: tempTitle
         });
-        
       if (sessionError && sessionError.code !== '23505') {
         console.error('⚠️ セッション作成エラー:', sessionError.message);
       }
     }
-    // ==========================================
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -147,24 +139,20 @@ export default function App() {
       sender: 'user',
       time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
     };
-    
     setMessages(prev => [...prev, userMessage]);
     setInputText(''); 
     setIsThinking(true);
     
     logEvent('diagnostic_run', { payload: { action: 'text_sent', textLength: targetText.length } });
-
     try {
-      // メインのAI応答を生成
+      // メメインのAI応答を生成
       const aiReplyText = await chatService.sendMessage(targetText, currentSessionId);
-
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
         text: aiReplyText,
         sender: 'ai',
         time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
       };
-      
       setMessages(prev => [...prev, aiMessage]);
 
       if (isVoice) {
@@ -172,17 +160,12 @@ export default function App() {
       }
 
       // ==========================================
-      // ②【会話のお尻】1往復目なら裏側で本物のタイトルを自動生成（update）
+      // ②【会話のお尻】サイドバーのリフレッシュのみ
       // ==========================================
-      if (messages.length === 0) {
-        // 裏側でGroqを走らせ、タイトルを上書き。完了したらサイドバーを再読み込み。
-        titleGenerator.generateAndSaveTitle(targetText, aiReplyText, currentSessionId)
-          .then(() => loadSessionList());
-      } else {
-        // 2往復目以降は、単純にサイドバーの表示をリフレッシュするだけ
-        loadSessionList();
-      }
-      // ==========================================
+      // 💡 修正：phraseExtractor側が裏の非同期処理で「ナレッジグラフ抽出」と同時に
+      // 「会話タイトルの自動生成・上書き」も一括兼任するようになったため、
+      // UI側（App.tsx）はシンプルにセッションリストをリフレッシュするだけで完結します。
+      loadSessionList();
 
     } catch (error) {
       console.error('AI応答エラー:', error);
@@ -191,10 +174,8 @@ export default function App() {
     }
   };
 
-  // ── 6. 音声録音とテキスト化パイプラインからの呼び出し ──
   const handleAudioStop = async (audioBlob: Blob, hasSpoken: boolean) => {
     logEvent('recording_stopped', { payload: { reason: 'manual' } });
-
     if (!hasSpoken) {
       console.log('無音のため文字起こしをスキップしました');
       return;
@@ -208,8 +189,8 @@ export default function App() {
       logEvent('stt_response_received', { payload: { text: transcribedText } });
       
       if (transcribedText) {
-        // 💡 修正：音声からのテキスト化なので、第二引数に true を渡す
-        handleSend(transcribedText, true);
+        const fixedText = await textFixerService.fixText(transcribedText, groqApiKey);
+        handleSend(fixedText, true);
       }
     } catch (error: any) {
       alert("文字起こしに失敗しました: " + error.message);
@@ -218,14 +199,13 @@ export default function App() {
     }
   };
 
-  // 💡 修正：フックから currentRms を受け取るように変更
   const { startPipeline, stopPipeline, isRecording, isSpeaking, currentRms } = useAudioPipeline({
       onStop: handleAudioStop
   });
 
   const handleMicClick = () => {
     if (isRecording) {
-      stopPipeline(); 
+      stopPipeline();
     } else {
       startPipeline();
       logEvent('recording_started');
@@ -250,7 +230,6 @@ export default function App() {
 
   return (
     <div className="fixed inset-0 w-full flex bg-slate-50 font-sans text-slate-800 overflow-hidden overscroll-none">
-      {/* 💡 コメントは必ず親タグの内側に配置します */}
       
       {isSidebarOpen && (
         <div className="absolute inset-0 bg-slate-900/20 z-40 transition-opacity" onClick={() => setSidebarOpen(false)} />
@@ -347,6 +326,7 @@ export default function App() {
                   <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Waiting for your voice...</p>
                 </div>
               )}
+     
               {messages.map((msg) => (
                 <div key={msg.id} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'} w-full animate-in fade-in duration-500`}>
                   <div className={`max-w-[88%] p-4 rounded-3xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap ${
@@ -356,7 +336,7 @@ export default function App() {
                   }`}>
                     {msg.text}
                   </div>
-                  
+              
                   <div className={`flex items-center mt-2 ${msg.sender === 'user' ? 'mr-1 flex-row-reverse' : 'ml-1'}`}>
                     <span className="text-[10px] font-bold text-slate-300 tracking-tighter">
                       {msg.time}
@@ -461,7 +441,6 @@ export default function App() {
                    isRecording ? (isSpeaking ? 'Voice Detected' : 'Tap to Stop') : 'Tap to Speak'}
                 </span>
 
-                {/* 💡 NEW: スマホデバッグ用のリアルタイム音圧インジケーターを追加 */}
                 {isRecording && (
                   <span className="text-[9px] font-mono text-slate-400 opacity-60">
                     RMS: {(currentRms || 0).toFixed(5)} (Target: 0.01000)
