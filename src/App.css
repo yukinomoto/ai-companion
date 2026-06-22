@@ -2,10 +2,7 @@
    🔒 AI Companion App Style Sheet
    ========================================== */
 :root {
-  --bg-gradient: linear-gradient(180deg, #ffffff 0%, #f0f9ff 35%, #faf5ff 70%, #e0f2fe 100%);
-  --text-main: #1e293b;
-  --text-sub: #64748b;
-  --accent-blue: #3b82f6;
+  --bg-gradient: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
 }
 
 html, body {
@@ -22,11 +19,10 @@ html, body {
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
 
-/* 💡 追加: ページ全体のスクロールを滑らかに */
+  /* スクロールを滑らかに */
   scroll-behavior: smooth;
 }
 
-/* 💡 追加: スクロールエリア（チャット枠など）にiOSの慣性スクロールを強制適用 */
 * {
   -webkit-overflow-scrolling: touch;
 }
@@ -37,105 +33,6 @@ html, body {
 .hide-scrollbar::-webkit-scrollbar { display: none; }
 .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
-/* ==========================================
-   UI Components & Animations
-   ========================================== */
-
-/* 🌟 通常モード時の吹き出し（頭上に配置。被りなし） */
-@keyframes popup {
-  0% { opacity: 0; transform: scale(0.9) translateY(10px); }
-  100% { opacity: 1; transform: scale(1) translateY(0); }
-}
-.animate-popup {
-  animation: popup 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-.speech-bubble {
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-  border-radius: 28px;
-  padding: 22px 26px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
-  text-align: center;
-  border: 1px solid rgba(255, 255, 255, 0.7);
-  max-width: 320px;
-}
-
-/* 完璧な下しっぽ（三角形突起） */
-.speech-bubble::after {
-  content: '';
-  position: absolute;
-  bottom: -11px;
-  left: 50%;
-  transform: translateX(-50%);
-  border-width: 11px 11px 0;
-  border-style: solid;
-  border-color: rgba(255, 255, 255, 0.85) transparent transparent transparent;
-  filter: drop-shadow(0 4px 2px rgba(0, 0, 0, 0.05));
-}
-
-
-/* ==========================================
-   🌟 テキスト表示モード
-   ========================================== */
-.chat-display-overlay {
-  position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
-  z-index: 150;
-  overflow-y: auto;
-  padding: 100px 24px 130px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-}
-
-.text-mode-bubble-user {
-  background: #ffffff;
-  color: var(--text-main);
-  padding: 14px 20px;
-  border-radius: 24px 24px 4px 24px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.03);
-  font-size: 15px; line-height: 1.6; font-weight: 500;
-}
-
-.text-mode-bubble-ai {
-  background: rgba(255, 255, 255, 0.8);
-  border: 1px solid rgba(255, 255, 255, 0.6);
-  color: var(--text-main);
-  padding: 16px 20px;
-  border-radius: 24px 24px 24px 4px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.02);
-  font-size: 15px; line-height: 1.6; font-weight: 500;
-}
-
-.message-bubble {
-  word-break: break-word; /* 枠をはみ出す長い単語を強制折り返し */
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-/* 音声再生ボタンの美しいスタイリング */
-.listen-again-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 10px;
-  border: none;
-  background: #f0fdf4;
-  color: #16a34a;
-  padding: 6px 12px;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-/* ==========================================
-   ✨ プレミアムUI：マイクロインタラクション
-   ========================================== */
-
 /* メッセージ出現時のスプリング（バネ）アニメーション */
 @keyframes spring-up {
   0% { opacity: 0; transform: translateY(16px) scale(0.98); }
@@ -144,6 +41,16 @@ html, body {
 }
 
 .animate-spring {
-  /* cubic-bezier で物理的なバネの動きを再現 */
   animation: spring-up 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+/* ==========================================
+   💡 CSSでの強制折り返し（はみ出し防止の要）
+   ========================================== */
+.message-bubble {
+  /* 以下の組み合わせで、どんな長い記号や英単語でも強制的に枠内で折り返します */
+  word-break: break-word !important; 
+  overflow-wrap: break-word !important; 
+  white-space: pre-wrap !important; 
+  max-width: 100%; /* これがないと、中身に引っ張られて枠自体が広がってしまうことがあります */
 }

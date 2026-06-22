@@ -50,7 +50,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // 💡 修正: 下部のスペーサー（余白）の底辺に合わせてスクロール
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, isThinking]);
 
   const loadSessionList = async () => {
@@ -314,9 +315,10 @@ export default function App() {
       </div>
 
       {/* 💬 Main Chat Area */}
-      <div className="flex-1 flex flex-col h-full bg-slate-50 max-w-4xl mx-auto w-full shadow-inner">
-        {/* 💡 修正：ヘッダーを高級ガラス風（border-white/80 と深いシャドウ）に */}
-        <header className="flex items-center justify-between px-6 py-4 bg-white/60 backdrop-blur-2xl border-b border-white/80 shadow-[0_4px_24px_-8px_rgba(0,0,0,0.03)] z-10 shrink-0">
+      <div className="flex-1 flex flex-col h-full bg-slate-50/50 max-w-4xl mx-auto w-full shadow-inner relative z-0 overflow-hidden">
+        
+        {/* 💡 修正: Headerを absolute にして浮かせ、裏側をチャットが通り抜けられるようにする */}
+        <header className="absolute top-0 left-0 right-0 flex items-center justify-between px-6 py-4 bg-white/60 backdrop-blur-xl border-b border-white/80 shadow-[0_4px_24px_-8px_rgba(0,0,0,0.05)] z-30">
           <button onClick={() => setSidebarOpen(true)} className="p-2 text-slate-500 hover:text-blue-800 transition-colors rounded-full bg-transparent">
             <Menu size={22} strokeWidth={1.5} />
           </button>
@@ -324,101 +326,111 @@ export default function App() {
           <div className="w-[38px]" />
         </header>
 
-        {/* 💡 修正：mainタグに relative を追加し、背景テキストの絶対配置の基準にする */}
-        <main className="flex-1 overflow-y-auto overscroll-none p-6 space-y-8 scroll-smooth relative">
+        {/* 💡 修正1: overflow-x-hidden を追加し、画面全体の横スクロールを物理的に抹殺 */}
+        <main className="absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-none scroll-smooth z-10 pt-[72px] selectable-text hide-scrollbar">
           
-          {messages.length === 0 && !isThinking && !showDiagnostic && (
-            <div className="fixed inset-0 flex flex-col items-center justify-center opacity-30 select-none pointer-events-none z-0">
-              <div className="w-16 h-16 bg-slate-200 rounded-full flex items-center justify-center mb-4">
-                <Mic size={32} className="text-slate-400" />
+          <div className="max-w-2xl mx-auto p-6 relative min-h-full flex flex-col w-full">
+            
+            {messages.length === 0 && !isThinking && !showDiagnostic && (
+              <div className="flex-1 flex flex-col items-center justify-center opacity-30 select-none pointer-events-none pb-12">
+                <div className="w-16 h-16 bg-slate-200 rounded-full flex items-center justify-center mb-4 shadow-inner">
+                  <Mic size={32} className="text-slate-400" />
+                </div>
+                <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Waiting for your voice...</p>
               </div>
-              <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Waiting for your voice...</p>
-            </div>
-          )}
+            )}
 
-          {showDiagnostic ? (
-            <div className="animate-spring relative z-10">
-              <button onClick={() => setShowDiagnostic(false)} className="text-xs font-bold text-blue-500 hover:text-blue-700 mb-6 flex items-center bg-blue-50 px-3 py-2 rounded-full">
-                <X size={14} className="mr-1" /> Close Diagnostics
-              </button>
-              <AudioDiagnostic />
-            </div>
-          ) : (
-            <div className="relative z-10">
-              {messages.map((msg) => (
-                <div key={msg.id} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'} w-full animate-spring mb-8`}>
-                  <div className={`max-w-[88%] p-4 rounded-3xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap flex flex-col message-bubble ${
-                    msg.sender === 'user' 
-                      ? 'bg-blue-600 text-white rounded-tr-none' 
-                      : 'bg-white border border-slate-100 text-slate-700 rounded-tl-none'
-                  }`}>
-                    {msg.imageUrl && (
-                      <img 
-                        src={msg.imageUrl} 
-                        alt="Uploaded" 
-                        className="w-full max-w-[240px] rounded-xl mb-2 object-cover border border-white/20 shadow-sm bg-slate-100" 
-                      />
-                    )}
-                    {msg.text}
-                  </div>
-              
-                  <div className={`flex items-center mt-2 ${msg.sender === 'user' ? 'mr-1 flex-row-reverse' : 'ml-1'}`}>
-                    <span className="text-[10px] font-bold text-slate-300 tracking-tighter">
-                      {msg.time}
-                    </span>
+            {showDiagnostic ? (
+              <div className="animate-spring relative z-10 w-full">
+                <button onClick={() => setShowDiagnostic(false)} className="text-xs font-bold text-blue-500 hover:text-blue-700 mb-6 flex items-center bg-blue-50 px-3 py-2 rounded-full">
+                  <X size={14} className="mr-1" /> Close Diagnostics
+                </button>
+                <AudioDiagnostic />
+              </div>
+            ) : (
+              <div className="relative z-10 w-full">
+                {messages.map((msg) => (
+                  <div key={msg.id} className={`flex flex-col group ${msg.sender === 'user' ? 'items-end' : 'items-start'} w-full animate-spring mb-8`}>
                     
-                    <button 
-                      onClick={() => handleCopyText(msg.id, msg.text)}
-                      className={`flex items-center justify-center ml-3 p-1.5 rounded-full transition-colors ${
-                        copiedMessageId === msg.id 
-                          ? 'text-green-500 bg-green-50' 
-                          : 'text-slate-400 hover:text-blue-500 hover:bg-slate-100'
-                      }`}
-                      title="テキストをコピー"
-                    >
-                      {copiedMessageId === msg.id ? <Check size={14} /> : <Copy size={14} />}
-                    </button>
+                    <div className={`max-w-[88%] p-4 rounded-3xl shadow-sm text-[15px] leading-relaxed relative flex flex-col ${
+                      msg.sender === 'user' 
+                        ? 'bg-blue-600/95 text-white rounded-tr-none border border-blue-500/50 shadow-blue-600/20' 
+                        : 'bg-white/85 text-slate-700 rounded-tl-none border border-white/60 shadow-slate-200/50'
+                    }`}>
+                      {msg.imageUrl && (
+                        <img 
+                          src={msg.imageUrl} 
+                          alt="Uploaded" 
+                          className="w-full max-w-[240px] rounded-xl mb-2 object-cover border border-white/20 shadow-sm bg-slate-100" 
+                        />
+                      )}
+                      
+                      {/* 💡 修正2: 呪いを解く専用の箱。min-w-0 と break-all で、どんな記号の連続でも強制的に折り返す */}
+                      <div className="min-w-0 w-full break-all whitespace-pre-wrap">
+                        {msg.text}
+                      </div>
 
-                    {msg.sender === 'ai' && (
-                      <button
-                        onClick={() => handleManualPlay(msg.id, msg.text)}
-                        className={`flex items-center gap-1.5 ml-2 px-3 py-1 rounded-full transition-all border ${
-                          playingMessageId === msg.id 
-                            ? 'bg-blue-50 border-blue-100 text-blue-500' 
-                            : 'bg-white border border-slate-100 text-slate-400 hover:text-blue-500 hover:border-blue-100'
+                    </div>
+                
+                    {/* アクションボタン群 */}
+                    <div className={`flex items-center mt-2 ${msg.sender === 'user' ? 'mr-1 flex-row-reverse' : 'ml-1'}`}>
+                      <span className="text-[10px] font-bold text-slate-300 tracking-tighter">
+                        {msg.time}
+                      </span>
+                      
+                      <button 
+                        onClick={() => handleCopyText(msg.id, msg.text)}
+                        className={`flex items-center justify-center ml-3 p-1.5 rounded-full transition-colors ${
+                          copiedMessageId === msg.id 
+                            ? 'text-green-500 bg-green-50' 
+                            : 'text-slate-400 hover:text-blue-500 hover:bg-slate-100'
                         }`}
+                        title="テキストをコピー"
                       >
-                        {playingMessageId === msg.id ? (
-                          <VolumeX size={12} className="animate-pulse" />
-                        ) : (
-                          <Volume2 size={12} />
-                        )}
-                        <span className="text-[9px] font-bold uppercase tracking-tighter">
-                          {playingMessageId === msg.id ? 'Stop' : 'Listen'}
-                        </span>
+                        {copiedMessageId === msg.id ? <Check size={14} /> : <Copy size={14} />}
                       </button>
-                    )}
+
+                      {msg.sender === 'ai' && (
+                        <button
+                          onClick={() => handleManualPlay(msg.id, msg.text)}
+                          className={`flex items-center gap-1.5 ml-2 px-3 py-1 rounded-full transition-all border ${
+                            playingMessageId === msg.id 
+                              ? 'bg-blue-50 border-blue-100 text-blue-500' 
+                              : 'bg-white border border-slate-100 text-slate-400 hover:text-blue-500 hover:border-blue-100'
+                          }`}
+                        >
+                          {playingMessageId === msg.id ? (
+                            <VolumeX size={12} className="animate-pulse" />
+                          ) : (
+                            <Volume2 size={12} />
+                          )}
+                          <span className="text-[9px] font-bold uppercase tracking-tighter">
+                            {playingMessageId === msg.id ? 'Stop' : 'Listen'}
+                          </span>
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
-              
-              {isThinking && (
-                <div className="flex flex-col items-start w-full mt-2 animate-pulse">
-                  <div className="bg-white border border-slate-50 text-slate-300 p-4 rounded-3xl rounded-tl-none shadow-sm flex items-center space-x-3">
-                    <Loader2 className="animate-spin" size={16} />
-                    <span className="text-xs font-bold uppercase tracking-widest">Processing...</span>
+                ))}
+                
+                {isThinking && (
+                  <div className="flex flex-col items-start w-full mt-2 animate-pulse mb-8">
+                    <div className="bg-white/85 border border-white/60 text-slate-500 px-6 py-4 rounded-3xl rounded-tl-none shadow-sm flex items-center space-x-3 relative">
+                      <Loader2 className="animate-spin" size={16} />
+                      <span className="text-[11px] font-bold uppercase tracking-widest">Processing...</span>
+                    </div>
                   </div>
-                </div>
-              )}
-              
-              <div ref={chatEndRef} className="h-4" />
-            </div>
-          )}
+                )}
+              </div>
+            )}
+            
+            <div ref={chatEndRef} className="h-[220px] shrink-0 pointer-events-none" />
+            
+          </div>
         </main>
 
         {!showDiagnostic && (
-          /* 💡 修正：フッター（入力欄）も高級ガラス風（border-white/80）に */
-          <div className="w-full bg-white/60 backdrop-blur-2xl border-t border-white/80 p-6 shrink-0 shadow-[0_-4px_32px_-10px_rgba(0,0,0,0.08)] relative z-20">
+          <div className="absolute bottom-0 left-0 right-0 bg-white/60 backdrop-blur-xl border-t border-white/80 p-6 shadow-[0_-8px_32px_-10px_rgba(0,0,0,0.08)] z-30">
             <div className="max-w-2xl mx-auto flex flex-col items-center gap-6">
               
               <ChatInput 
@@ -460,7 +472,6 @@ export default function App() {
                    isRecording ? (isSpeaking ? 'Voice Detected' : 'Tap to Stop') : 'Tap to Add Text'}
                 </span>
 
-                {/* 💡 修正：RMSレイアウトシフト防止。常に高さを確保し、録音中以外は透明（opacity-0）にする */}
                 <div className="h-4 flex items-center justify-center">
                   <span className={`text-[9px] font-mono transition-opacity duration-300 ${
                     isRecording ? 'text-slate-400 opacity-60' : 'text-slate-300 opacity-0'
