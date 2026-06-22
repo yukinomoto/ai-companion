@@ -21,6 +21,14 @@ html, body {
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
+
+/* 💡 追加: ページ全体のスクロールを滑らかに */
+  scroll-behavior: smooth;
+}
+
+/* 💡 追加: スクロールエリア（チャット枠など）にiOSの慣性スクロールを強制適用 */
+* {
+  -webkit-overflow-scrolling: touch;
 }
 
 #root { width: 100%; height: 100%; }
@@ -28,51 +36,6 @@ html, body {
 
 .hide-scrollbar::-webkit-scrollbar { display: none; }
 .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-
-
-/* ==========================================
-   📱 💡 最新iOS PWA対応：縦画面固定警告シールド
-   （インプット欄のズレや回転バグを物理的に防ぐ防壁）
-   ========================================== */
-@media screen and (orientation: landscape) {
-  html, body {
-    position: fixed;
-    width: 100vw !important;
-    height: 100vh !important;
-    overflow: hidden !important;
-  }
-
-  /* 横向きの時はアプリ本体（#root）を非表示にし、textarea等の配置が狂うのを完全に防ぐ */
-  #root {
-    display: none !important;
-  }
-
-  /* 画面が横を向いている状態でも、テキストだけは縦向き（直立）に読めるように配置 */
-  body::before {
-    content: "MA-i は縦画面専用です。\n\nスマホを縦に持ち直してください。";
-    white-space: pre-wrap;
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    width: 100vh; /* 横画面の高さに合わせる */
-    height: 100vw; /* 横画面の幅に合わせる */
-    background-color: #1e40af; /* MA-iのテーマカラー（濃い青） */
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.2rem;
-    font-weight: bold;
-    letter-spacing: 0.05em;
-    text-align: center;
-    line-height: 1.8;
-    z-index: 999999;
-    /* 💡 横を向いた画面に対して、テキストレイヤーをマイナス90度回して縦表示を維持 */
-    transform: translate(-50%, -50%) rotate(-90deg);
-    transform-origin: center;
-  }
-}
-
 
 /* ==========================================
    UI Components & Animations
@@ -147,6 +110,12 @@ html, body {
   font-size: 15px; line-height: 1.6; font-weight: 500;
 }
 
+.message-bubble {
+  word-break: break-word; /* 枠をはみ出す長い単語を強制折り返し */
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 /* 音声再生ボタンの美しいスタイリング */
 .listen-again-btn {
   display: inline-flex;
@@ -161,4 +130,20 @@ html, body {
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
+}
+
+/* ==========================================
+   ✨ プレミアムUI：マイクロインタラクション
+   ========================================== */
+
+/* メッセージ出現時のスプリング（バネ）アニメーション */
+@keyframes spring-up {
+  0% { opacity: 0; transform: translateY(16px) scale(0.98); }
+  60% { opacity: 1; transform: translateY(-2px) scale(1.01); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.animate-spring {
+  /* cubic-bezier で物理的なバネの動きを再現 */
+  animation: spring-up 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
 }

@@ -1,5 +1,6 @@
 // src/services/textFixerService.ts
 import { dbService } from './dbService';
+import { supabase } from '../lib/supabase'; // 💡 新規追加: 候補保存用
 import { SYSTEM_PROMPTS } from '../prompts';
 import { useLoggerStore } from '../store/useLoggerStore';
 import { apiConfig, API_MODELS } from '../config/apiConfig';
@@ -9,7 +10,7 @@ import { apiWrapper } from '../utils/apiWrapper';
 const TEMPERATURE = 0.1;
 const MAX_TOKENS = 1024;
 
-// 💡 追加: Whisper特有の無音時幻聴パターン
+// 💡 プログラム側で弾くWhisper特有の無音時幻聴パターン
 const WHISPER_HALLUCINATIONS = [
   "ご視聴ありがとうございました",
   "ご視聴いただきありがとうございました",
@@ -27,12 +28,13 @@ export const textFixerService = {
     const logEvent = useLoggerStore.getState().logEvent;
 
     // ==========================================
-    // STEP 1: プログラム（コード）による事前処理
+    // STEP 1: プログラムによる事前処理（Fast AIの最適化）
     // ==========================================
+    
     // 1-1. 短すぎる発話（3文字以下）はAIを通さずそのまま返す
     if (trimmedText.length <= 3) return trimmedText;
 
-    // 1-2. 幻聴フィルター（安全設計）
+    // 1-2. 幻聴フィルター（30文字以下の完全/部分一致ノイズを弾く）
     if (trimmedText.length <= 30) {
       const cleanText = trimmedText.replace(/[。、.\s]/g, '');
       
@@ -42,7 +44,7 @@ export const textFixerService = {
       }
 
       const isHallucination = WHISPER_HALLUCINATIONS.some(pattern => 
-        cleanText.includes(pattern)
+        cleanText === pattern
       );
 
       if (isHallucination) {
@@ -54,12 +56,9 @@ export const textFixerService = {
     // ==========================================
     // STEP 2: 辞書の取得とAIによる補正
     // ==========================================
-    // 1. dbService経由で辞書取得（ペアと単体ヒントの両方を受け取る）
     const { pairs, hints } = await dbService.getPhraseCorrections();
     
-    // 2. Groq API で補正
     try {
-      // 💡 ペアによる絶対ルールと、単独ワードによる推測ヒントの2段構えで辞書テキストを構築
       const pairStrings = pairs.map(p => `・「${p.alias_phrase}」と聞こえたら「${p.canonical_phrase}」に強制置換する`);
       const rulesText = pairStrings.length > 0 ? `\n【強制置換ルール】\n${pairStrings.join('\n')}` : '';
       const hintsText = hints.length > 0 ? `\n【頻出ワード（この表記・漢字を優先的に当てはめてください）】\n${hints.join(', ')}` : '';
@@ -67,10 +66,9 @@ export const textFixerService = {
       const dictionaryString = rulesText + hintsText;
       const systemPrompt = `${SYSTEM_PROMPTS.TEXT_FIXER}${dictionaryString}`;
 
-      // 💡 追加: ユーザー入力を明確にデータとして隔離
+      // 💡 ユーザー入力を明確にデータとして隔離
       const userMessageContent = `<input_text>\n${trimmedText}\n</input_text>`;
 
-      // 🛡️ シールド発動：Groqの通信をラッパーで保護
       const rawContent = await apiWrapper.execute('GROQ', false, async () => {
         const currentGroqKey = apiConfig.getGroqApiKey();
         if (!currentGroqKey) throw new Error('Groq API Key is missing');
@@ -82,7 +80,9 @@ export const textFixerService = {
             model: API_MODELS.GROQ.TEXT_FIXER,
             messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userMessageContent }],
             temperature: TEMPERATURE,
-            max_tokens: MAX_TOKENS
+            max_tokens: MAX_TOKENS,
+            // 💡 追加: 停止シーケンス。タグを閉じた瞬間に強制終了させる
+            stop: ["</fixed>"]
           })
         });
 
@@ -101,21 +101,35 @@ export const textFixerService = {
       if (match && match[1]) {
         fixedText = match[1].trim();
       } else {
-        // 万が一LLMがタグを忘れた場合のフォールバック
         fixedText = rawContent.replace(/<fixed>|<\/fixed>/g, '').trim();
       }
 
-      // 💡 念のための長文暴走チェック（原文の1.5倍+10文字以上の長さになっていたら暴走とみなす）
+      // 💡 長文暴走チェック（原文の1.5倍+10文字以上の長さなら暴走とみなす）
       if (fixedText.length > trimmedText.length * 1.5 + 10) {
         console.warn("TEXT_FIXER 暴走検知: 長文が生成されたため原文を採用します", fixedText);
-        fixedText = trimmedText; // 暴走時は安全のため原文にフォールバック
+        fixedText = trimmedText; 
       }
 
+      // ==========================================
+      // STEP 3: 結果の処理とエビデンス（候補）の蓄積
+      // ==========================================
       if (fixedText) {
         logEvent('diagnostic_run', { payload: { note: 'Text Fixed', original: trimmedText, fixed: fixedText } });
+
+        // 🚀 【新規追加】AIによる補正が発生した場合、証拠保管庫へ非同期で放り込む
+        if (fixedText !== trimmedText) {
+          supabase.from('correction_candidates').insert({
+            original_text: trimmedText,
+            fixed_text: fixedText
+          }).then(({ error }) => {
+            if (error) console.error('候補データの保存に失敗しました:', error);
+          });
+        }
+
         return fixedText;
       }
       return trimmedText;
+
     } catch (error: any) {
       logEvent('audio_play_error', { error_message: `Text Fixer Failed: ${error.message}` });
       return trimmedText; 

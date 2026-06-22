@@ -24,17 +24,17 @@ export function ChatInput({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // 💡 既存の機能1：テキストの入力内容に合わせて最大4行（96px）まで高さを動的に自動拡張する
+  // テキストの入力内容に合わせて最大4行まで高さを動的に自動拡張する
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
 
     textarea.style.height = 'auto'; // 一度リセット
-    const nextHeight = Math.min(textarea.scrollHeight, 96); // 最大4行相当(96px)に制限
+    const nextHeight = Math.min(textarea.scrollHeight, 120); // 最大高さを少し余裕を持たせる
     textarea.style.height = `${nextHeight}px`;
   }, [inputText]);
 
-  // 💡 既存の機能2：画像をブラウザ側で綺麗にリサイズ・圧縮する処理（完全維持）
+  // 画像圧縮処理
   const compressImage = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -131,9 +131,9 @@ export function ChatInput({
         </div>
       )}
 
-      {/* ⌨️ テキスト入力（textarea拡張）＆ボタン領域 */}
-      {/* 💡 修正：外枠を rounded-[28px] にして美しいカプセル型に */}
-      <div className="w-full relative flex items-end group bg-slate-50 border border-slate-200 focus-within:border-blue-300 focus-within:ring-4 focus-within:ring-blue-500/5 rounded-[28px] p-2 transition-all shadow-sm">
+      {/* ⌨️ テキスト入力＆ボタン領域 */}
+      {/* 💡 修正ポイント: p-1 (上下左右4pxの隙間) と rounded-3xl (24pxの角丸) を指定 */}
+      <div className="w-full relative flex items-end group bg-slate-50 border border-slate-200 focus-within:border-blue-300 focus-within:ring-4 focus-within:ring-blue-500/5 rounded-3xl p-1 transition-all shadow-sm">
         <input 
           type="file" 
           accept="image/*" 
@@ -143,18 +143,20 @@ export function ChatInput({
         />
         
         {/* 画像選択ボタン */}
-        {/* 💡 修正：ボタンを完全な円形 (rounded-full) に */}
+        {/* 💡 修正ポイント: w-10 h-10 (40px) の正円に固定し、余計なmarginを削除 */}
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled}
-          className={`p-2.5 transition-colors rounded-full shrink-0 ${
-            selectedImage ? 'text-blue-500 bg-blue-50' : 'text-slate-400 hover:text-blue-500 hover:bg-slate-100'
+          className={`w-10 h-10 flex items-center justify-center transition-colors rounded-full shrink-0 ${
+            selectedImage ? 'text-blue-500 bg-blue-50' : 
+            'text-slate-400 hover:text-blue-500 hover:bg-slate-100'
           } disabled:opacity-50`}
         >
           <ImagePlus size={20} strokeWidth={2} />
         </button>
 
         {/* 自動拡張テキストエリア */}
+        {/* 💡 修正ポイント: py-2 (上下8px) に変更。文字(約24px)+上下16px = 高さ40px となりボタンと完全に一致する */}
         <textarea 
           ref={textareaRef}
           rows={1}
@@ -167,17 +169,17 @@ export function ChatInput({
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={disabled}
-          className={`flex-1 max-h-24 bg-transparent border-none outline-none resize-none text-[16px] text-slate-700 py-2.5 px-3 font-sans leading-normal hide-scrollbar selectable-text ${
+          className={`flex-1 max-h-28 bg-transparent border-none outline-none resize-none text-[16px] text-slate-700 py-2 px-2 font-sans leading-relaxed hide-scrollbar selectable-text ${
             isTranscribing || isThinking ? 'text-blue-400 italic' : ''
           }`}
         />
         
         {/* 送信ボタン */}
-        {/* 💡 修正：ボタンを完全な円形 (rounded-full) に */}
+        {/* 💡 修正ポイント: w-10 h-10 (40px) の正円に固定 */}
         <button 
           onClick={handleSend}
           disabled={disabled || !canSend}
-          className={`p-2.5 rounded-full transition-all shadow-sm shrink-0 flex items-center justify-center ${
+          className={`w-10 h-10 rounded-full transition-all shadow-sm shrink-0 flex items-center justify-center ${
             disabled || !canSend
               ? 'bg-slate-100 text-slate-300' 
               : 'bg-blue-600 text-white hover:bg-blue-700 active:scale-95'

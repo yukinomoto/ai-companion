@@ -1,7 +1,7 @@
 // src/App.tsx
 import { useState, useEffect, useRef } from 'react';
 import { 
-  Menu, X, Mic, Square, Volume2, Loader2, PlusCircle
+  Menu, X, Mic, Square, Volume2, Loader2, PlusCircle, VolumeX, Copy, Check 
 } from 'lucide-react';
 import { useLoggerStore, initLoggerObserver } from './store/useLoggerStore';
 import { AudioDiagnostic } from './components/AudioDiagnostic';
@@ -26,6 +26,7 @@ export default function App() {
   const [inputText, setInputText] = useState('');
   const [showDiagnostic, setShowDiagnostic] = useState(false);
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
@@ -46,13 +47,6 @@ export default function App() {
   useEffect(() => {
     initLoggerObserver();
     loadSessionList(); 
-
-    // 💡 追加：最新ブラウザ向けの画面向きロック（Web API）
-    if (screen.orientation && typeof screen.orientation.lock === 'function') {
-      screen.orientation.lock('portrait').catch((err) => {
-        console.log('Orientation lock skipped or not supported:', err.message);
-      });
-    }
   }, []);
 
   useEffect(() => {
@@ -80,6 +74,7 @@ export default function App() {
 
   const loadSpecificSession = async (targetSessionId: string) => {
     try {
+      audioService.stop();
       setCurrentSessionId(targetSessionId);
       const { data, error } = await supabase
         .from('chat_messages')
@@ -104,6 +99,7 @@ export default function App() {
   };
 
   const handleNewChat = () => {
+    audioService.stop(); 
     logEvent('diagnostic_run', { payload: { action: 'start_new_session' } });
     setCurrentSessionId(crypto.randomUUID());
     setMessages([]);
@@ -127,6 +123,8 @@ export default function App() {
     
     if (isVoice) {
       audioService.unlock();
+    } else {
+      audioService.stop(); 
     }
 
     if (messages.length === 0) {
@@ -195,7 +193,7 @@ export default function App() {
       
       if (transcribedText) {
         const fixedText = await textFixerService.fixText(transcribedText);
-        handleSend(fixedText, true);
+        setInputText(prev => prev ? `${prev} ${fixedText}` : fixedText);
       }
     } catch (error: any) {
       alert("Transcription failed: " + error.message);
@@ -209,6 +207,7 @@ export default function App() {
   });
 
   const handleMicClick = () => {
+    audioService.stop(); 
     if (isRecording) {
       stopPipeline();
     } else {
@@ -233,6 +232,16 @@ export default function App() {
     }
   };
 
+  const handleCopyText = async (messageId: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedMessageId(messageId);
+      setTimeout(() => setCopiedMessageId(null), 2000);
+    } catch (err) {
+      console.error('Failed to copy text: ', err);
+    }
+  };
+
   return (
     <div className="fixed inset-0 w-full flex bg-slate-50 font-sans text-slate-800 overflow-hidden overscroll-none portrait-lock">
       
@@ -251,7 +260,6 @@ export default function App() {
 
         <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8">
           <div>
-            {/* 💡 修正：アイコンの濃い青 (#1e40af = blue-800) に変更 */}
             <button 
               onClick={handleNewChat}
               className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-blue-800 text-white rounded-full hover:bg-blue-900 transition-all shadow-md active:scale-95 mb-8"
@@ -307,39 +315,39 @@ export default function App() {
 
       {/* 💬 Main Chat Area */}
       <div className="flex-1 flex flex-col h-full bg-slate-50 max-w-4xl mx-auto w-full shadow-inner">
-        <header className="flex items-center justify-between px-6 py-4 bg-white/80 backdrop-blur-md border-b border-slate-100 z-10 shrink-0">
-          {/* 💡 修正：ハンバーガーメニューの背景色を削除し完全に透過 */}
+        {/* 💡 修正：ヘッダーを高級ガラス風（border-white/80 と深いシャドウ）に */}
+        <header className="flex items-center justify-between px-6 py-4 bg-white/60 backdrop-blur-2xl border-b border-white/80 shadow-[0_4px_24px_-8px_rgba(0,0,0,0.03)] z-10 shrink-0">
           <button onClick={() => setSidebarOpen(true)} className="p-2 text-slate-500 hover:text-blue-800 transition-colors rounded-full bg-transparent">
             <Menu size={22} strokeWidth={1.5} />
           </button>
-          
           <h1 className="text-sm font-bold text-slate-800 tracking-tighter">MA-i</h1>
-          
           <div className="w-[38px]" />
         </header>
 
-        <main className="flex-1 overflow-y-auto overscroll-none p-6 space-y-8 scroll-smooth">
+        {/* 💡 修正：mainタグに relative を追加し、背景テキストの絶対配置の基準にする */}
+        <main className="flex-1 overflow-y-auto overscroll-none p-6 space-y-8 scroll-smooth relative">
+          
+          {messages.length === 0 && !isThinking && !showDiagnostic && (
+            <div className="fixed inset-0 flex flex-col items-center justify-center opacity-30 select-none pointer-events-none z-0">
+              <div className="w-16 h-16 bg-slate-200 rounded-full flex items-center justify-center mb-4">
+                <Mic size={32} className="text-slate-400" />
+              </div>
+              <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Waiting for your voice...</p>
+            </div>
+          )}
+
           {showDiagnostic ? (
-            <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
+            <div className="animate-spring relative z-10">
               <button onClick={() => setShowDiagnostic(false)} className="text-xs font-bold text-blue-500 hover:text-blue-700 mb-6 flex items-center bg-blue-50 px-3 py-2 rounded-full">
                 <X size={14} className="mr-1" /> Close Diagnostics
               </button>
               <AudioDiagnostic />
             </div>
           ) : (
-            <>
-              {messages.length === 0 && !isThinking && (
-                <div className="flex flex-col items-center justify-center h-full opacity-30 select-none">
-                  <div className="w-16 h-16 bg-slate-200 rounded-full flex items-center justify-center mb-4">
-                    <Mic size={32} className="text-slate-400" />
-                  </div>
-                  <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Waiting for your voice...</p>
-                </div>
-              )}
-      
+            <div className="relative z-10">
               {messages.map((msg) => (
-                <div key={msg.id} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'} w-full animate-in fade-in duration-500`}>
-                  <div className={`max-w-[88%] p-4 rounded-3xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap flex flex-col ${
+                <div key={msg.id} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'} w-full animate-spring mb-8`}>
+                  <div className={`max-w-[88%] p-4 rounded-3xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap flex flex-col message-bubble ${
                     msg.sender === 'user' 
                       ? 'bg-blue-600 text-white rounded-tr-none' 
                       : 'bg-white border border-slate-100 text-slate-700 rounded-tl-none'
@@ -358,22 +366,35 @@ export default function App() {
                     <span className="text-[10px] font-bold text-slate-300 tracking-tighter">
                       {msg.time}
                     </span>
+                    
+                    <button 
+                      onClick={() => handleCopyText(msg.id, msg.text)}
+                      className={`flex items-center justify-center ml-3 p-1.5 rounded-full transition-colors ${
+                        copiedMessageId === msg.id 
+                          ? 'text-green-500 bg-green-50' 
+                          : 'text-slate-400 hover:text-blue-500 hover:bg-slate-100'
+                      }`}
+                      title="テキストをコピー"
+                    >
+                      {copiedMessageId === msg.id ? <Check size={14} /> : <Copy size={14} />}
+                    </button>
+
                     {msg.sender === 'ai' && (
                       <button
                         onClick={() => handleManualPlay(msg.id, msg.text)}
-                        className={`flex items-center gap-1.5 ml-4 px-3 py-1 rounded-full transition-all border ${
+                        className={`flex items-center gap-1.5 ml-2 px-3 py-1 rounded-full transition-all border ${
                           playingMessageId === msg.id 
                             ? 'bg-blue-50 border-blue-100 text-blue-500' 
                             : 'bg-white border border-slate-100 text-slate-400 hover:text-blue-500 hover:border-blue-100'
                         }`}
                       >
                         {playingMessageId === msg.id ? (
-                          <Loader2 size={12} className="animate-spin" />
+                          <VolumeX size={12} className="animate-pulse" />
                         ) : (
                           <Volume2 size={12} />
                         )}
                         <span className="text-[9px] font-bold uppercase tracking-tighter">
-                          {playingMessageId === msg.id ? 'Playing' : 'Listen'}
+                          {playingMessageId === msg.id ? 'Stop' : 'Listen'}
                         </span>
                       </button>
                     )}
@@ -391,12 +412,13 @@ export default function App() {
               )}
               
               <div ref={chatEndRef} className="h-4" />
-            </>
+            </div>
           )}
         </main>
 
         {!showDiagnostic && (
-          <div className="w-full bg-white/80 backdrop-blur-lg border-t border-slate-100 p-6 shrink-0 shadow-2xl">
+          /* 💡 修正：フッター（入力欄）も高級ガラス風（border-white/80）に */
+          <div className="w-full bg-white/60 backdrop-blur-2xl border-t border-white/80 p-6 shrink-0 shadow-[0_-4px_32px_-10px_rgba(0,0,0,0.08)] relative z-20">
             <div className="max-w-2xl mx-auto flex flex-col items-center gap-6">
               
               <ChatInput 
@@ -409,7 +431,6 @@ export default function App() {
               />
 
               <div className="flex flex-col items-center gap-3">
-                {/* 💡 修正：マイクボタンの背景をアイコンの濃い青 (#1e40af = blue-800) に変更 */}
                 <button 
                   onClick={handleMicClick}
                   disabled={isTranscribing || isThinking}
@@ -418,6 +439,7 @@ export default function App() {
                     isRecording ? 'bg-red-500 scale-110 shadow-red-500/40 ring-4 ring-red-50' : 
                     'bg-blue-800 shadow-blue-800/30 hover:bg-blue-900 hover:scale-105 active:scale-95 ring-4 ring-blue-50'
                   }`}
+                  title="マイクで入力欄にテキストを追加"
                 >
                   {isTranscribing || isThinking ? <Loader2 size={28} className="animate-spin opacity-50" /> : 
                    isRecording ? <Square size={28} className="fill-white" /> : 
@@ -435,14 +457,18 @@ export default function App() {
                 }`}>
                   {isTranscribing ? 'Processing' :
                    isThinking ? 'Analyzing' :
-                   isRecording ? (isSpeaking ? 'Voice Detected' : 'Tap to Stop') : 'Tap to Speak'}
+                   isRecording ? (isSpeaking ? 'Voice Detected' : 'Tap to Stop') : 'Tap to Add Text'}
                 </span>
 
-                {isRecording && (
-                  <span className="text-[9px] font-mono text-slate-400 opacity-60">
+                {/* 💡 修正：RMSレイアウトシフト防止。常に高さを確保し、録音中以外は透明（opacity-0）にする */}
+                <div className="h-4 flex items-center justify-center">
+                  <span className={`text-[9px] font-mono transition-opacity duration-300 ${
+                    isRecording ? 'text-slate-400 opacity-60' : 'text-slate-300 opacity-0'
+                  }`}>
                     RMS: {(currentRms || 0).toFixed(5)} (Target: 0.01000)
                   </span>
-                )}
+                </div>
+
               </div>
             </div>
           </div>
