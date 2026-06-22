@@ -9,11 +9,51 @@ import { apiWrapper } from '../utils/apiWrapper';
 const TEMPERATURE = 0.1;
 const MAX_TOKENS = 1024;
 
+// 💡 追加: Whisper特有の無音時幻聴パターン
+const WHISPER_HALLUCINATIONS = [
+  "ご視聴ありがとうございました",
+  "ご視聴いただきありがとうございました",
+  "チャンネル登録お願いします",
+  "チャンネル登録と高評価",
+  "サブスクリプション",
+  "お疲れ様でした",
+];
+
 export const textFixerService = {
   async fixText(rawText: string): Promise<string> {
-    if (!rawText.trim()) return rawText;
+    const trimmedText = rawText.trim();
+    if (!trimmedText) return '';
+
     const logEvent = useLoggerStore.getState().logEvent;
 
+    // ==========================================
+    // STEP 1: プログラム（コード）による事前処理
+    // ==========================================
+    // 1-1. 短すぎる発話（3文字以下）はAIを通さずそのまま返す
+    if (trimmedText.length <= 3) return trimmedText;
+
+    // 1-2. 幻聴フィルター（安全設計）
+    if (trimmedText.length <= 30) {
+      const cleanText = trimmedText.replace(/[。、.\s]/g, '');
+      
+      if (cleanText.startsWith('字幕') || cleanText.endsWith('字幕')) {
+        console.log('🛡️ TextFixer: 字幕ノイズをブロックしました', trimmedText);
+        return '';
+      }
+
+      const isHallucination = WHISPER_HALLUCINATIONS.some(pattern => 
+        cleanText.includes(pattern)
+      );
+
+      if (isHallucination) {
+        console.log('🛡️ TextFixer: Whisperの幻聴をブロックしました', trimmedText);
+        return '';
+      }
+    }
+
+    // ==========================================
+    // STEP 2: 辞書の取得とAIによる補正
+    // ==========================================
     // 1. dbService経由で辞書取得（ペアと単体ヒントの両方を受け取る）
     const { pairs, hints } = await dbService.getPhraseCorrections();
     
@@ -27,6 +67,9 @@ export const textFixerService = {
       const dictionaryString = rulesText + hintsText;
       const systemPrompt = `${SYSTEM_PROMPTS.TEXT_FIXER}${dictionaryString}`;
 
+      // 💡 追加: ユーザー入力を明確にデータとして隔離
+      const userMessageContent = `<input_text>\n${trimmedText}\n</input_text>`;
+
       // 🛡️ シールド発動：Groqの通信をラッパーで保護
       const rawContent = await apiWrapper.execute('GROQ', false, async () => {
         const currentGroqKey = apiConfig.getGroqApiKey();
@@ -37,7 +80,7 @@ export const textFixerService = {
           headers: { 'Authorization': `Bearer ${currentGroqKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             model: API_MODELS.GROQ.TEXT_FIXER,
-            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: rawText }],
+            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userMessageContent }],
             temperature: TEMPERATURE,
             max_tokens: MAX_TOKENS
           })
@@ -48,11 +91,10 @@ export const textFixerService = {
         }
 
         const resData = await response.json();
-        // 💡 変更: APIからは生のテキスト（rawContent）として一旦受け取る
         return resData.choices?.[0]?.message?.content || "";
       });
 
-      // 💡 追加: 正規表現で <fixed> タグの中身だけを抽出
+      // 💡 正規表現で <fixed> タグの中身だけを抽出
       const match = rawContent.match(/<fixed>([\s\S]*?)<\/fixed>/);
       let fixedText = "";
       
@@ -63,20 +105,20 @@ export const textFixerService = {
         fixedText = rawContent.replace(/<fixed>|<\/fixed>/g, '').trim();
       }
 
-      // 💡 追加: 念のための長文暴走チェック（原文の1.5倍+10文字以上の長さになっていたら暴走とみなす）
-      if (fixedText.length > rawText.length * 1.5 + 10) {
+      // 💡 念のための長文暴走チェック（原文の1.5倍+10文字以上の長さになっていたら暴走とみなす）
+      if (fixedText.length > trimmedText.length * 1.5 + 10) {
         console.warn("TEXT_FIXER 暴走検知: 長文が生成されたため原文を採用します", fixedText);
-        fixedText = rawText; // 暴走時は安全のため原文にフォールバック
+        fixedText = trimmedText; // 暴走時は安全のため原文にフォールバック
       }
 
       if (fixedText) {
-        logEvent('diagnostic_run', { payload: { note: 'Text Fixed', original: rawText, fixed: fixedText } });
+        logEvent('diagnostic_run', { payload: { note: 'Text Fixed', original: trimmedText, fixed: fixedText } });
         return fixedText;
       }
-      return rawText;
+      return trimmedText;
     } catch (error: any) {
       logEvent('audio_play_error', { error_message: `Text Fixer Failed: ${error.message}` });
-      return rawText; 
+      return trimmedText; 
     }
   }
 };
