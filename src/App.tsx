@@ -124,7 +124,7 @@ export default function App() {
     const targetText = textToSend || inputText;
     if (!targetText.trim() && !imageToSend) return; 
     
-    // 💡 NEW: 直接の音声送信か、マイク経由で入力されたテキストなら「音声モード」とする
+    // 💡 直接の音声送信か、マイク経由で入力されたテキストなら「音声モード」とする
     const isActuallyVoice = isVoice || isVoiceMode;
 
     if (isActuallyVoice) {
@@ -159,7 +159,7 @@ export default function App() {
     
     setInputText(''); 
     setIsThinking(true);
-    // 💡 NEW: 送信したら音声フラグをリセットする
+    // 💡 送信したら音声フラグをリセットする
     setIsVoiceMode(false); 
     
     logEvent('diagnostic_run', { payload: { action: 'text_sent', hasImage: !!imageToSend } });
@@ -169,6 +169,15 @@ export default function App() {
       const baseText = typeof response === 'string' ? response : response.aiText;
       const altText = typeof response === 'object' && response.altText ? response.altText : '';
       
+      // 💡 NEW: 開発・検証用に、ログパネルにだけAとBの内訳を独立して出力する
+      logEvent('diagnostic_run', { 
+        payload: { 
+          note: 'AI Response Split',
+          role_A: baseText,
+          role_B: altText || '[発動なし（空文字）]'
+        } 
+      });
+
       // 区切り線なしで自然に繋げる
       const combinedText = altText 
         ? `${baseText}\n\n${altText}` 
@@ -182,7 +191,7 @@ export default function App() {
       };
       setMessages(prev => [...prev, aiMessage]);
 
-      // 💡 NEW: isVoice ではなく isActuallyVoice で判定して読み上げる
+      // 💡 isVoice ではなく isActuallyVoice で判定して読み上げる
       if (isActuallyVoice) {
         speakText(combinedText); 
       }
