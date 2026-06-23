@@ -31,6 +31,9 @@ export default function App() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   
+  // 💡 NEW: 音声で入力されたテキストかどうかを記憶するフラグ
+  const [isVoiceMode, setIsVoiceMode] = useState(false); 
+  
   const [currentSessionId, setCurrentSessionId] = useState<string>(crypto.randomUUID());
   const [sessionList, setSessionList] = useState<{sessionId: string, title: string}[]>([]);
   
@@ -121,7 +124,10 @@ export default function App() {
     const targetText = textToSend || inputText;
     if (!targetText.trim() && !imageToSend) return; 
     
-    if (isVoice) {
+    // 💡 NEW: 直接の音声送信か、マイク経由で入力されたテキストなら「音声モード」とする
+    const isActuallyVoice = isVoice || isVoiceMode;
+
+    if (isActuallyVoice) {
       audioService.unlock();
     } else {
       audioService.stop(); 
@@ -150,19 +156,20 @@ export default function App() {
       imageUrl: imageToSend ? `data:${imageToSend.mimeType};base64,${imageToSend.base64}` : undefined
     };
     setMessages(prev => [...prev, userMessage]);
+    
     setInputText(''); 
     setIsThinking(true);
+    // 💡 NEW: 送信したら音声フラグをリセットする
+    setIsVoiceMode(false); 
     
     logEvent('diagnostic_run', { payload: { action: 'text_sent', hasImage: !!imageToSend } });
     try {
-      // 💡 修正: chatService から返されるオブジェクトを Any 型で受け取る（後方互換性のため）
       const response = await chatService.sendMessage(targetText, currentSessionId, imageToSend) as any;
       
-      // 💡 修正: 文字列で返ってきた場合と、オブジェクト { aiText, altText } で返ってきた場合の両方に対応
       const baseText = typeof response === 'string' ? response : response.aiText;
       const altText = typeof response === 'object' && response.altText ? response.altText : '';
       
-      // 💡 修正: 役割Bの出力（altText）が存在する場合、マークダウンの水平線（---）で区切って1つのテキストに統合する
+      // 区切り線なしで自然に繋げる
       const combinedText = altText 
         ? `${baseText}\n\n${altText}` 
         : baseText;
@@ -175,8 +182,9 @@ export default function App() {
       };
       setMessages(prev => [...prev, aiMessage]);
 
-      if (isVoice) {
-        speakText(combinedText); // 💡 音声合成も結合された1つのテキストとして自然に読み上げます
+      // 💡 NEW: isVoice ではなく isActuallyVoice で判定して読み上げる
+      if (isActuallyVoice) {
+        speakText(combinedText); 
       }
 
       loadSessionList();
@@ -205,6 +213,9 @@ export default function App() {
       if (transcribedText) {
         const fixedText = await textFixerService.fixText(transcribedText);
         setInputText(prev => prev ? `${prev} ${fixedText}` : fixedText);
+        
+        // 💡 NEW: マイクからの入力であることを記憶させる
+        setIsVoiceMode(true); 
       }
     } catch (error: any) {
       alert("Transcription failed: " + error.message);
