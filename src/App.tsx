@@ -50,7 +50,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // 💡 修正: 下部のスペーサー（余白）の底辺に合わせてスクロール
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, isThinking]);
 
@@ -156,17 +155,28 @@ export default function App() {
     
     logEvent('diagnostic_run', { payload: { action: 'text_sent', hasImage: !!imageToSend } });
     try {
-      const aiReplyText = await chatService.sendMessage(targetText, currentSessionId, imageToSend);
+      // 💡 修正: chatService から返されるオブジェクトを Any 型で受け取る（後方互換性のため）
+      const response = await chatService.sendMessage(targetText, currentSessionId, imageToSend) as any;
+      
+      // 💡 修正: 文字列で返ってきた場合と、オブジェクト { aiText, altText } で返ってきた場合の両方に対応
+      const baseText = typeof response === 'string' ? response : response.aiText;
+      const altText = typeof response === 'object' && response.altText ? response.altText : '';
+      
+      // 💡 修正: 役割Bの出力（altText）が存在する場合、マークダウンの水平線（---）で区切って1つのテキストに統合する
+      const combinedText = altText 
+        ? `${baseText}\n\n${altText}` 
+        : baseText;
+
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
-        text: aiReplyText,
+        text: combinedText,
         sender: 'ai',
         time: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })
       };
       setMessages(prev => [...prev, aiMessage]);
 
       if (isVoice) {
-        speakText(aiReplyText);
+        speakText(combinedText); // 💡 音声合成も結合された1つのテキストとして自然に読み上げます
       }
 
       loadSessionList();
@@ -317,7 +327,6 @@ export default function App() {
       {/* 💬 Main Chat Area */}
       <div className="flex-1 flex flex-col h-full bg-slate-50/50 max-w-4xl mx-auto w-full shadow-inner relative z-0 overflow-hidden">
         
-        {/* 💡 修正: Headerを absolute にして浮かせ、裏側をチャットが通り抜けられるようにする */}
         <header className="absolute top-0 left-0 right-0 flex items-center justify-between px-6 py-4 bg-white/60 backdrop-blur-xl border-b border-white/80 shadow-[0_4px_24px_-8px_rgba(0,0,0,0.05)] z-30">
           <button onClick={() => setSidebarOpen(true)} className="p-2 text-slate-500 hover:text-blue-800 transition-colors rounded-full bg-transparent">
             <Menu size={22} strokeWidth={1.5} />
@@ -326,7 +335,6 @@ export default function App() {
           <div className="w-[38px]" />
         </header>
 
-        {/* 💡 修正1: overflow-x-hidden を追加し、画面全体の横スクロールを物理的に抹殺 */}
         <main className="absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-none scroll-smooth z-10 pt-[72px] selectable-text hide-scrollbar">
           
           <div className="max-w-2xl mx-auto p-6 relative min-h-full flex flex-col w-full">
@@ -365,7 +373,6 @@ export default function App() {
                         />
                       )}
                       
-                      {/* 💡 修正2: 呪いを解く専用の箱。min-w-0 と break-all で、どんな記号の連続でも強制的に折り返す */}
                       <div className="min-w-0 w-full break-all whitespace-pre-wrap">
                         {msg.text}
                       </div>

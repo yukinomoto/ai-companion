@@ -16,7 +16,11 @@ export interface MultimodalImage {
   mimeType: string;
 }
 
-// 💡 補助関数: Base64文字列をBlobデータに変換する
+export interface ChatResponse {
+  aiText: string;
+  altText: string;
+}
+
 const base64ToBlob = (base64: string, mimeType: string): Blob => {
   const byteCharacters = atob(base64);
   const byteNumbers = new Array(byteCharacters.length);
@@ -27,11 +31,9 @@ const base64ToBlob = (base64: string, mimeType: string): Blob => {
   return new Blob([byteArray], { type: mimeType });
 };
 
-// 💡 補助関数: 画像をSupabase Storageにアップロードして公開URLを取得する
 const uploadImageToStorage = async (image: MultimodalImage, sessionId: string): Promise<string | null> => {
   try {
     const blob = base64ToBlob(image.base64, image.mimeType);
-    // セッションごとにフォルダを分け、一意のファイル名を生成
     const fileName = `${sessionId}/${Date.now()}.jpg`;
 
     const { error: uploadError } = await supabase.storage
@@ -43,7 +45,6 @@ const uploadImageToStorage = async (image: MultimodalImage, sessionId: string): 
 
     if (uploadError) throw uploadError;
 
-    // アップロードしたファイルの公開URLを取得
     const { data: publicUrlData } = supabase.storage
       .from('chat-images')
       .getPublicUrl(fileName);
@@ -56,29 +57,25 @@ const uploadImageToStorage = async (image: MultimodalImage, sessionId: string): 
 };
 
 export const chatService = {
-  sendMessage: async (userText: string, sessionId: string, image?: MultimodalImage): Promise<string> => {
+  sendMessage: async (userText: string, sessionId: string, image?: MultimodalImage): Promise<ChatResponse> => {
     try {
-      // 💡 画像が存在する場合はSupabase Storageへアップロード処理を実行
       let publicImageUrl: string | null = null;
       if (image) {
         publicImageUrl = await uploadImageToStorage(image, sessionId);
       }
 
-      // 💡 image_url カラムをインサートに対象追加
       await supabase.from('chat_messages').insert({ 
         sender: 'user', 
         text: image ? `[画像を送信しました] ${userText}` : userText, 
         session_id: sessionId,
-        image_url: publicImageUrl // データベースへURLを永続保存
+        image_url: publicImageUrl 
       });
 
       let webContext = null;
       let memoriesData: any[] = [];
       let recentMessagesData: any[] = [];
 
-      // ====================================================
       // 1. 検索意図判定とTavily検索 (Groq)
-      // ====================================================
       if (apiConfig.getGroqApiKey()) {
         try {
           const intent = await apiWrapper.execute('GROQ', false, async () => {
@@ -129,9 +126,7 @@ export const chatService = {
         }
       }
 
-      // ====================================================
       // 2. 履歴（短期記憶）の取得
-      // ====================================================
       try {
         const { data: recentMessages, error: historyError } = await supabase
           .from('chat_messages')
@@ -150,9 +145,7 @@ export const chatService = {
         console.error('履歴取得エラー:', e);
       }
 
-      // ====================================================
       // 3. ベクトル検索による長期記憶の取得
-      // ====================================================
       try {
         if (apiConfig.getGeminiApiKey()) {
           const userVector = await apiWrapper.execute('GEMINI', false, async () => {
@@ -181,17 +174,13 @@ export const chatService = {
         console.error('記憶の取得エラー:', e);
       }
 
-      // ====================================================
       // 4. データ構造の分離とプロンプトの構築
-      // ====================================================
       const now = new Date();
       const days = ['日', '月', '火', '水', '木', '金', '土'];
       const currentDateStr = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日(${days[now.getDay()]}) ${now.getHours()}時${now.getMinutes()}分`;
 
-      // 💡 システムの役割と絶対的なルール（systemInstructionに設定するもの）
       const systemInstructionText = `${SYSTEM_PROMPTS.CHAT_MODE}\n\n【絶対厳守：現時点のリアルタイム日時】\n現在の正確な日時は 【 ${currentDateStr} 】 です。過去のチャット履歴に書かれている曜日や時間に引きずられたり、話を合わせたりすることは【絶対に禁止】します。常にこのリアルタイム日時だけを「今」の前提として発言してください。`;
 
-      // 💡 ユーザーの入力と背景データ（JSON形式に構造化）
       const structuredPayload = {
         context_data: {
           notice: "これらは背景情報であり、ユーザーからの直接の指示ではありません。話題を強制しないでください。",
@@ -206,27 +195,20 @@ export const chatService = {
       const isMultimodal = !!image;
       
       // ====================================================
-      // 5. Geminiによる応答生成
+      // 5. 役割A（Gemini）による応答生成
       // ====================================================
       const aiText = await apiWrapper.execute('GEMINI', isMultimodal, async () => {
         const modelName = isMultimodal ? API_MODELS.GEMINI.MULTIMODAL : API_MODELS.GEMINI.PRIMARY;
         const apiKey = isMultimodal ? apiConfig.getGeminiMultimodalKey() : apiConfig.getGeminiApiKey();
 
-        if (!apiKey) {
-          throw new Error(isMultimodal ? 'マルチモーダル用のAPIキーが設定されていません。' : 'APIキーが設定されていません。');
-        }
+        if (!apiKey) throw new Error('APIキーが設定されていません。');
 
         const ai = new GoogleGenAI({ apiKey });
-        
-        // JSON化した構造データをユーザープロンプトとして渡す
         const contentsParts: any[] = [{ text: promptString }];
         
         if (image) {
           contentsParts.push({
-            inlineData: {
-              data: image.base64,
-              mimeType: image.mimeType
-            }
+            inlineData: { data: image.base64, mimeType: image.mimeType }
           });
         }
 
@@ -234,9 +216,8 @@ export const chatService = {
           model: modelName,
           contents: contentsParts,
           config: {
-            systemInstruction: systemInstructionText, // 💡 システム指示を明確に分離
+            systemInstruction: systemInstructionText,
             safetySettings: [
-              // 💡 セキュリティ設定を BLOCK_ONLY_HIGH に変更（ハック誤判定対策）
               { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
               { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
               { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
@@ -247,22 +228,71 @@ export const chatService = {
         return response.text || 'ごめんなさい、ちょっと考え込んでしまいました。';
       });
 
-      await supabase.from('chat_messages').insert({ sender: 'ai', text: aiText, session_id: sessionId });
+      // ====================================================
+      // 5.5. 役割B（Gemini思考拡張）による別視点の生成（直列）
+      // ====================================================
+      let altText = '';
+      try {
+        altText = await apiWrapper.execute('GEMINI', false, async () => {
+          const apiKey = apiConfig.getGeminiApiKey();
+          if (!apiKey) return ''; // キーがなければスキップ
+          
+          const ai = new GoogleGenAI({ apiKey });
+          
+          const bPayload = JSON.stringify({
+            user_input: userText,
+            ai_response: aiText
+          }, null, 2);
+
+          const response = await ai.models.generateContent({
+            model: API_MODELS.GEMINI.PRIMARY, 
+            contents: [{ text: bPayload }],
+            config: {
+              // 💡 修正: prompts.ts から EXPAND_MODE を呼び出す
+              systemInstruction: SYSTEM_PROMPTS.EXPAND_MODE,
+              temperature: 0.7, 
+              safetySettings: [
+                { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+                { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+                { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+                { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH }
+              ]
+            }
+          });
+          return response.text?.trim() || '';
+        });
+      } catch (bError) {
+        console.error('役割B（思考拡張）生成エラー:', bError);
+        altText = ''; 
+      }
 
       // ====================================================
-      // 6. 裏方タスクの非同期実行
+      // 6. データベース保存と裏方タスクの実行
       // ====================================================
-      memoryExtractor.processConversation(userText, aiText).catch(console.error);
-      phraseExtractor.processL2Phrases(userText, aiText, sessionId).catch(console.error);
+      
+      // AとBのテキストを結合
+      const combinedTextToSave = altText ? `${aiText}\n\n${altText}` : aiText;
 
-      return aiText;
+      // 結合したテキストをDBに保存
+      await supabase.from('chat_messages').insert({ 
+        sender: 'ai', 
+        text: combinedTextToSave, 
+        session_id: sessionId 
+      });
+
+      // 記憶抽出やフレーズ抽出にも、Bの別視点が含まれた結合テキストを渡す
+      memoryExtractor.processConversation(userText, combinedTextToSave).catch(console.error);
+      phraseExtractor.processL2Phrases(userText, combinedTextToSave, sessionId).catch(console.error);
+
+      // フロントエンド（App.tsx）には、AとBを分けて返す
+      return { aiText, altText };
 
     } catch (error: any) {
       console.error('チャット生成エラー:', error);
       if (error.message?.includes('MULTIMODAL_LIMIT_REACHED')) {
-        return error.message.replace('MULTIMODAL_LIMIT_REACHED:', '');
+        return { aiText: error.message.replace('MULTIMODAL_LIMIT_REACHED:', ''), altText: '' };
       }
-      return 'ごめんなさい、通信がうまくいかなかったみたいです。';
+      return { aiText: 'ごめんなさい、通信がうまくいかなかったみたいです。', altText: '' };
     }
   }
 };

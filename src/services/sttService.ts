@@ -13,14 +13,13 @@ export const sttService = {
     const formData = new FormData();
     const extension = audioBlob.type.includes('mp4') ? 'mp4' : 'webm';
     formData.append('file', audioBlob, `audio.${extension}`);
-    formData.append('model', API_MODELS.GROQ.STT_WHISPER); // 💡 定数を利用
+    formData.append('model', API_MODELS.GROQ.STT_WHISPER);
     formData.append('language', 'ja');
     formData.append('temperature', '0.0'); 
 
     try {
       // 🛡️ シールド発動：Groqの通信をラッパーで保護
       const text = await apiWrapper.execute('GROQ', false, async () => {
-        // 💡 引数の apiKey ではなく、リトライ時に自動で切り替わる apiConfig の最新キーを使用する
         const currentGroqKey = apiConfig.getGroqApiKey();
         if (!currentGroqKey) {
           throw new Error('Groq API Keyが設定されていません');
@@ -43,8 +42,6 @@ export const sttService = {
       });
 
       // 💡 対策B: 無音時の定番「幻覚単体」ブラックリスト（完全一致で弾く）
-      // ユーザーが本気で「こんにちは」と言った時は2文字以上（「こんにちは！」や前後の文脈）になることが多いため、
-      // 記号を取り除いた純粋な文字列がこれら「1単語のみ」の場合は無音の幻覚とみなします。
       const cleanText = text.replace(/[、。！？.!?. ]/g, '');
       const singleWordHallucinations = [
         'こんにちは', 'はい', 'はじめまして', 'ありがとうございます', 'お疲れ様でした'
@@ -55,7 +52,21 @@ export const sttService = {
         'ご視聴ありがとうございました', '字幕', 'サブタイトル', '無音', 'MBC'
       ];
       
-      const hasWhisperLoop = /(.{3,})\1{1,}/.test(text);
+      // 💡 修正: トータルの文字数と「占有率」を組み合わせた、賢いループ検知
+      const loopMatch = text.match(/(.{3,})\1{1,}/);
+      let hasWhisperLoop = false;
+
+      if (loopMatch) {
+        const loopLength = loopMatch[0].length; // 繰り返された部分の合計文字数
+        const totalLength = text.length;        // トータルの文字数
+
+        // 【条件】以下のどちらかを満たした場合のみ、Whisperの無限ループバグとみなす
+        // 1. トータルの文字数が極端に短い（30文字未満）のにループしている
+        // 2. 長文であっても、ループ部分が全体の「40%以上」を占めている
+        if (totalLength < 30 || (loopLength / totalLength) > 0.4) {
+          hasWhisperLoop = true;
+        }
+      }
 
       if (
         text.length <= 1 || 
