@@ -94,7 +94,7 @@ export const AudioDiagnostic: React.FC = () => {
       
       logEvent('audio_play_start');
       // audioService.play を使用して再生
-      await audioService.play(textToSpeak, 'ja-JP-Neural2-B', gcloudApiKey);
+      await audioService.play(textToSpeak, gcloudApiKey);
       logEvent('audio_play_end');
 
       setStatus('全音声診断クリア！');
