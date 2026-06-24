@@ -1,17 +1,18 @@
 // src/App.tsx
 import { useState, useEffect, useRef } from 'react';
 import { 
-  Menu, X, Mic, Square, Volume2, Loader2, PlusCircle, VolumeX, Copy, Check 
+  Menu, X, Mic, Square, Volume2, Loader2, PlusCircle, VolumeX, Copy, Check, Settings 
 } from 'lucide-react';
 import { useLoggerStore, initLoggerObserver } from './store/useLoggerStore';
 import { AudioDiagnostic } from './components/AudioDiagnostic';
-import { audioService } from './services/audioService';
+import { audioService, VOICE_PRESETS } from './services/audioService';
 import { sttService } from './services/sttService';
 import { useAudioPipeline } from './hooks/useAudioPipeline';
 import { supabase } from './lib/supabase';
 import { chatService, type MultimodalImage } from './services/chatService';
 import { textFixerService } from './services/textFixerService';
 import { ChatInput } from './components/ChatInput';
+import { useSettingsStore } from './store/useSettingsStore'; 
 
 interface Message {
   id: string;
@@ -25,13 +26,14 @@ export default function App() {
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [inputText, setInputText] = useState('');
   const [showDiagnostic, setShowDiagnostic] = useState(false);
+  
+  const [showSettings, setShowSettings] = useState(false);
+  
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
-  
-  // 💡 NEW: 音声で入力されたテキストかどうかを記憶するフラグ
   const [isVoiceMode, setIsVoiceMode] = useState(false); 
   
   const [currentSessionId, setCurrentSessionId] = useState<string>(crypto.randomUUID());
@@ -41,6 +43,8 @@ export default function App() {
   const copyLogsToClipboard = useLoggerStore((state: any) => state.copyLogsToClipboard);
   const clearLogs = useLoggerStore((state: any) => state.clearLogs);
   
+  const settings = useSettingsStore();
+
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const gcloudApiKey = import.meta.env.VITE_GOOGLE_CLOUD_API_KEY;
@@ -109,14 +113,17 @@ export default function App() {
     setSidebarOpen(false);
   };
 
-  const speakText = async (text: string) => {
+  const speakText = async (text: string, messageId: string) => {
     if (!gcloudApiKey) return;
+    setPlayingMessageId(messageId); 
     try {
       logEvent('audio_play_start');
-      await audioService.play(text, 'ja-JP-Neural2-B', gcloudApiKey); 
+      await audioService.play(text, gcloudApiKey); 
       logEvent('audio_play_end');
     } catch (error: any) {
       logEvent('audio_play_error', { error_message: 'GCP TTS Error: ' + error });
+    } finally {
+      setPlayingMessageId(prev => prev === messageId ? null : prev);
     }
   };
 
@@ -124,7 +131,6 @@ export default function App() {
     const targetText = textToSend || inputText;
     if (!targetText.trim() && !imageToSend) return; 
     
-    // 💡 直接の音声送信か、マイク経由で入力されたテキストなら「音声モード」とする
     const isActuallyVoice = isVoice || isVoiceMode;
 
     if (isActuallyVoice) {
@@ -159,7 +165,6 @@ export default function App() {
     
     setInputText(''); 
     setIsThinking(true);
-    // 💡 送信したら音声フラグをリセットする
     setIsVoiceMode(false); 
     
     logEvent('diagnostic_run', { payload: { action: 'text_sent', hasImage: !!imageToSend } });
@@ -169,7 +174,6 @@ export default function App() {
       const baseText = typeof response === 'string' ? response : response.aiText;
       const altText = typeof response === 'object' && response.altText ? response.altText : '';
       
-      // 💡 NEW: 開発・検証用に、ログパネルにだけAとBの内訳を独立して出力する
       logEvent('diagnostic_run', { 
         payload: { 
           note: 'AI Response Split',
@@ -178,7 +182,6 @@ export default function App() {
         } 
       });
 
-      // 区切り線なしで自然に繋げる
       const combinedText = altText 
         ? `${baseText}\n\n${altText}` 
         : baseText;
@@ -191,9 +194,8 @@ export default function App() {
       };
       setMessages(prev => [...prev, aiMessage]);
 
-      // 💡 isVoice ではなく isActuallyVoice で判定して読み上げる
       if (isActuallyVoice) {
-        speakText(combinedText); 
+        speakText(combinedText, aiMessage.id);
       }
 
       loadSessionList();
@@ -222,8 +224,6 @@ export default function App() {
       if (transcribedText) {
         const fixedText = await textFixerService.fixText(transcribedText);
         setInputText(prev => prev ? `${prev} ${fixedText}` : fixedText);
-        
-        // 💡 NEW: マイクからの入力であることを記憶させる
         setIsVoiceMode(true); 
       }
     } catch (error: any) {
@@ -257,9 +257,9 @@ export default function App() {
     audioService.unlock();
     setPlayingMessageId(messageId);
     try {
-      await audioService.play(text, 'ja-JP-Neural2-B', gcloudApiKey!);
-    } finally {
-      setPlayingMessageId((prev) => (prev === messageId ? null : prev));
+      await audioService.play(text, gcloudApiKey!);
+    } catch (e) {
+      setPlayingMessageId(null);
     }
   };
 
@@ -289,7 +289,7 @@ export default function App() {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8">
+        <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8 flex flex-col">
           <div>
             <button 
               onClick={handleNewChat}
@@ -301,7 +301,7 @@ export default function App() {
           </div>
 
           {sessionList.length > 0 && (
-            <div>
+            <div className="flex-1">
               <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-4 px-1">Recent Sessions</h3>
               <ul className="space-y-2">
                 {sessionList.map((session) => (
@@ -323,8 +323,16 @@ export default function App() {
           )}
         </div>
         
-        {/* Verification Logs UI */}
+        {/* Verification Logs & Settings UI */}
         <div className="p-4 border-t border-slate-100 bg-slate-50/50 space-y-3">
+          <button 
+            onClick={() => setShowSettings(true)}
+            className="w-full flex items-center justify-center gap-2 py-2 mb-2 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-full transition-all text-xs font-bold active:scale-95"
+          >
+            <Settings size={14} />
+            Voice Settings
+          </button>
+          
           <div className="flex items-center gap-2">
             <button 
               onClick={copyLogsToClipboard}
@@ -343,6 +351,89 @@ export default function App() {
           <p className="text-[10px] text-center text-slate-300">© 2026 MA-i Engine v2.5</p>
         </div>
       </div>
+
+      {/* 💡 Voice Settings Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden animate-spring">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <h2 className="font-bold text-slate-800 flex items-center gap-2">
+                <Settings size={18} className="text-slate-500" />
+                Voice Settings
+              </h2>
+              <button onClick={() => setShowSettings(false)} className="p-2 text-slate-400 hover:bg-slate-200 hover:text-slate-600 rounded-full transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-7">
+              <div className="space-y-3">
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">Voice Model</label>
+                <select 
+                  value={settings.voiceId}
+                  onChange={(e) => settings.setVoiceId(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-slate-700 text-sm font-bold rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500 transition-all cursor-pointer"
+                >
+                  {VOICE_PRESETS.map(voice => (
+                    <option key={voice.id} value={voice.id}>{voice.name}</option>
+                  ))}
+                </select>
+                {settings.voiceId.includes('Chirp3') && (
+                  <p className="text-[10px] text-blue-500">※Chirp3 HDモデルはSSMLをサポートしていないため、以下のタメ設定は無効になります。</p>
+                )}
+              </div>
+
+              <div className={`space-y-3 ${settings.voiceId.includes('Chirp3') ? 'opacity-40 pointer-events-none' : ''}`}>
+                <label className="flex justify-between items-center text-xs font-bold uppercase tracking-widest">
+                  <span className="text-slate-400">読点（、）のタメ</span>
+                  <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded-md">{settings.commaBreak} ms</span>
+                </label>
+                <input 
+                  type="range" min="0" max="1000" step="50" 
+                  value={settings.commaBreak} 
+                  onChange={(e) => settings.setCommaBreak(Number(e.target.value))}
+                  className="w-full accent-blue-500 h-1.5 bg-slate-200 rounded-lg cursor-pointer" 
+                />
+              </div>
+
+              <div className={`space-y-3 ${settings.voiceId.includes('Chirp3') ? 'opacity-40 pointer-events-none' : ''}`}>
+                <label className="flex justify-between items-center text-xs font-bold uppercase tracking-widest">
+                  <span className="text-slate-400">句点（。）のタメ</span>
+                  <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded-md">{settings.periodBreak} ms</span>
+                </label>
+                <input 
+                  type="range" min="0" max="2000" step="50" 
+                  value={settings.periodBreak} 
+                  onChange={(e) => settings.setPeriodBreak(Number(e.target.value))}
+                  className="w-full accent-blue-500 h-1.5 bg-slate-200 rounded-lg cursor-pointer" 
+                />
+              </div>
+
+              <div className="space-y-3">
+                <label className="flex justify-between items-center text-xs font-bold uppercase tracking-widest">
+                  <span className="text-slate-400">話すスピード</span>
+                  <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded-md">x {settings.speakingRate.toFixed(2)}</span>
+                </label>
+                <input 
+                  type="range" min="0.5" max="2.0" step="0.05" 
+                  value={settings.speakingRate} 
+                  onChange={(e) => settings.setSpeakingRate(Number(e.target.value))}
+                  className="w-full accent-blue-500 h-1.5 bg-slate-200 rounded-lg cursor-pointer" 
+                />
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-100">
+              <button 
+                onClick={() => setShowSettings(false)}
+                className="w-full py-3 bg-blue-800 text-white font-bold rounded-xl hover:bg-blue-900 transition-colors shadow-md active:scale-95"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 💬 Main Chat Area */}
       <div className="flex-1 flex flex-col h-full bg-slate-50/50 max-w-4xl mx-auto w-full shadow-inner relative z-0 overflow-hidden">
@@ -426,6 +517,7 @@ export default function App() {
                               : 'bg-white border border-slate-100 text-slate-400 hover:text-blue-500 hover:border-blue-100'
                           }`}
                         >
+                          {/* 💡 修正: 存在しない messageId を消去し、msg.id のみで判定 */}
                           {playingMessageId === msg.id ? (
                             <VolumeX size={12} className="animate-pulse" />
                           ) : (

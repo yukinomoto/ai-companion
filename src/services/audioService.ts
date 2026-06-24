@@ -1,48 +1,81 @@
 // src/services/audioService.ts
+import { useSettingsStore } from '../store/useSettingsStore';
+
 export const VOICE_PRESETS = [
-  { id: 'ja-JP-Neural2-B', name: 'ハツラツ（女性）' },
-  { id: 'ja-JP-Wavenet-A', name: '落ち着いた（女性）' },
-  { id: 'ja-JP-Neural2-C', name: 'スマート（男性）' },
-  { id: 'ja-JP-Neural2-D', name: '渋い・低音（男性）' },
+  { id: 'ja-JP-Neural2-B', name: 'Neural2 女性 (ハツラツ)' },
+  { id: 'ja-JP-Neural2-C', name: 'Neural2 男性 (スマート)' },
+  { id: 'ja-JP-Neural2-D', name: 'Neural2 男性 (低音・渋め)' },
+  { id: 'ja-JP-Wavenet-A', name: 'Wavenet 女性 (落ち着き)' },
+  { id: 'ja-JP-Wavenet-B', name: 'Wavenet 女性 (標準)' },
+  { id: 'ja-JP-Wavenet-C', name: 'Wavenet 男性 (標準)' },
+  { id: 'ja-JP-Wavenet-D', name: 'Wavenet 男性 (落ち着き)' },
+  { id: 'ja-JP-Chirp3-HD-Aoede', name: 'Chirp3 HD 女性 (Aoede)' },
+  { id: 'ja-JP-Chirp3-HD-Leda', name: 'Chirp3 HD 女性 (Leda)' },
+  { id: 'ja-JP-Chirp3-HD-Callirrhoe', name: 'Chirp3 HD 女性 (Callirrhoe)' },
+  { id: 'ja-JP-Chirp3-HD-Achernar', name: 'Chirp3 HD 女性 (Achernar)' },
+  { id: 'ja-JP-Chirp3-HD-Charon', name: 'Chirp3 HD 男性 (Charon)' },
+  { id: 'ja-JP-Chirp3-HD-Achird', name: 'Chirp3 HD 男性 (Achird)' },
+  { id: 'ja-JP-Chirp3-HD-Algenib', name: 'Chirp3 HD 男性 (Algenib)' },
 ];
 
 let globalAudio: HTMLAudioElement | null = null;
-let currentBlobUrl: string | null = null;
 let currentPlaybackId = 0;
 
-// 長いテキストを句読点や改行で安全なサイズに分割する関数
-const splitTextIntoChunks = (text: string, maxLength: number = 200): string[] => {
-  const cleanText = text.replace(/[*#_`~]/g, '');
+// 💡 NEW: 先読みした音声を溜めておくキュー（待ち行列）
+let audioQueue: string[] = [];
+let isPlaying = false;
+
+const splitTextIntoChunks = (text: string, maxLength: number = 100): string[] => {
+  const cleanText = text.replace(/[*#_`~【】「」]/g, ' ').replace(/\s+/g, ' ').trim();
   const sentences = cleanText.match(/[^。！？\n]+[。！？\n]*/g) || [cleanText];
   
   const chunks: string[] = [];
   let currentChunk = '';
 
-  for (const sentence of sentences) {
-    if (currentChunk.length + sentence.length > maxLength && currentChunk.length > 0) {
+  const pushChunk = () => {
+    if (currentChunk.trim().length > 0) {
       chunks.push(currentChunk.trim());
-      currentChunk = sentence;
+      currentChunk = '';
+    }
+  };
+
+  for (let sentence of sentences) {
+    if (sentence.length > maxLength) {
+      const subSentences = sentence.match(/[^、，]+[、，]*/g) || [sentence];
+      for (let sub of subSentences) {
+        if (sub.length > maxLength) {
+          pushChunk();
+          let temp = sub;
+          while (temp.length > 0) {
+            chunks.push(temp.substring(0, maxLength).trim());
+            temp = temp.substring(maxLength);
+          }
+        } else {
+          if (currentChunk.length + sub.length > maxLength) pushChunk();
+          currentChunk += sub;
+        }
+      }
     } else {
+      if (currentChunk.length + sentence.length > maxLength) pushChunk();
       currentChunk += sentence;
     }
   }
-  if (currentChunk.trim().length > 0) {
-    chunks.push(currentChunk.trim());
-  }
+  pushChunk();
   return chunks;
 };
 
-// テキストに「ため（ポーズ）」を挿入してSSML形式に変換する関数
-const convertToSSML = (text: string): string => {
+const convertToSSML = (text: string, commaMs: number, periodMs: number): string => {
   let ssml = text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 
-  // 読点（、）には0.25秒の短いポーズ
-  ssml = ssml.replace(/、/g, '、<break time="250ms"/>');
-  // 句点（。）や感嘆符などには0.5秒のしっかりしたポーズ
-  ssml = ssml.replace(/([。！？])/g, '$1<break time="500ms"/>');
+  if (commaMs > 0) {
+    ssml = ssml.replace(/、/g, `、<break time="${commaMs}ms"/>`);
+  }
+  if (periodMs > 0) {
+    ssml = ssml.replace(/([。！？])/g, `$1<break time="${periodMs}ms"/>`);
+  }
 
   return `<speak>${ssml}</speak>`;
 };
@@ -60,48 +93,89 @@ export const audioService = {
 
   stop: () => {
     currentPlaybackId++; 
+    
+    // 💡 キューを空にしてメモリを解放
+    audioQueue.forEach(url => URL.revokeObjectURL(url));
+    audioQueue = [];
+    isPlaying = false;
+
     if (globalAudio) {
       globalAudio.pause();
       globalAudio.currentTime = 0;
     }
   },
 
-  play: async (text: string, voiceId: string, gcloudApiKey: string): Promise<void> => {
+  play: async (text: string, gcloudApiKey: string): Promise<void> => {
     if (!gcloudApiKey || !globalAudio) return;
     
+    const { voiceId, commaBreak, periodBreak, speakingRate } = useSettingsStore.getState();
+
     audioService.stop();
     const playbackId = currentPlaybackId; 
+    const chunks = splitTextIntoChunks(text, 100);
 
-    const chunks = splitTextIntoChunks(text, 250);
+    // 💡 キューから音声を順番に取り出して再生する関数
+    const playNext = async () => {
+      if (playbackId !== currentPlaybackId) return;
+      
+      if (audioQueue.length === 0) {
+        isPlaying = false; // 再生するものがなくなったら待機
+        return;
+      }
 
-    for (const chunk of chunks) {
-      if (playbackId !== currentPlaybackId) break;
-      if (!chunk) continue;
+      isPlaying = true;
+      const url = audioQueue.shift()!; // キューの先頭を取り出す
+      globalAudio!.src = url;
 
-      await new Promise<void>(async (resolve) => {
+      globalAudio!.onended = () => {
+        URL.revokeObjectURL(url); // 使い終わったメモリを解放
+        playNext(); // 次を再生
+      };
+      globalAudio!.onerror = () => {
+        URL.revokeObjectURL(url);
+        playNext();
+      };
+
+      try {
+        await globalAudio!.play();
+      } catch (e) {
+        console.error("音声再生エラー:", e);
+        URL.revokeObjectURL(url);
+        playNext();
+      }
+    };
+
+    // 💡 裏側でひたすらAPIを叩き、取得できたものからキューに突っ込む（先読み）
+    (async () => {
+      for (const chunk of chunks) {
+        if (playbackId !== currentPlaybackId) break;
+        if (!chunk) continue;
+
         try {
-          const ssmlChunk = convertToSSML(chunk);
+          const isChirp3 = voiceId.includes('Chirp3-HD');
+          let payloadInput = isChirp3 ? { text: chunk } : { ssml: convertToSSML(chunk, commaBreak, periodBreak) };
 
           const response = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${gcloudApiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              input: { ssml: ssmlChunk },
+              input: payloadInput,
               voice: { languageCode: 'ja-JP', name: voiceId },
-              // 💡 修正: speakingRate を 1.15 から 1.0 に変更（もっとゆっくりが良い場合は 0.9 にしてください）
-              audioConfig: { audioEncoding: 'MP3', speakingRate: 1.05, pitch: voiceId.includes('-B') ? 1.5 : 0.0 }
+              audioConfig: { 
+                audioEncoding: 'MP3', 
+                speakingRate: speakingRate, 
+                pitch: voiceId.includes('-B') ? 1.5 : 0.0 
+              }
             })
           });
 
           if (!response.ok) {
-            const errorText = await response.text();
-            console.error("GCP TTS API Error:", errorText);
-            resolve();
-            return;
+            console.error("GCP TTS API Error:", await response.text());
+            continue;
           }
 
           const data = await response.json();
-          if (!data.audioContent) { resolve(); return; }
+          if (!data.audioContent) continue;
 
           const binaryString = window.atob(data.audioContent);
           const len = binaryString.length;
@@ -111,20 +185,20 @@ export const audioService = {
           }
 
           const blob = new Blob([bytes], { type: 'audio/mp3' });
-          if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
-          currentBlobUrl = URL.createObjectURL(blob);
+          const url = URL.createObjectURL(blob);
 
-          globalAudio!.src = currentBlobUrl;
-          globalAudio!.onended = () => resolve(); 
-          globalAudio!.onerror = () => resolve();
-          
-          await globalAudio!.play();
+          // 取得した音声をキューに追加
+          audioQueue.push(url);
+
+          // 💡 もし今何も再生していなければ、すぐに再生をキックする！（これが爆速の理由）
+          if (!isPlaying) {
+            playNext();
+          }
 
         } catch (err) { 
-          console.error("音声再生エラー:", err);
-          resolve();
+          console.error("音声フェッチエラー:", err);
         }
-      });
-    }
+      }
+    })();
   }
 };
