@@ -9,7 +9,8 @@ import { audioService, VOICE_PRESETS } from './services/audioService';
 import { sttService } from './services/sttService';
 import { useAudioPipeline } from './hooks/useAudioPipeline';
 import { supabase } from './lib/supabase';
-import { chatService, type MultimodalImage } from './services/chatService';
+// 💡 修正: MultimodalImage を MultimodalAttachment に変更
+import { chatService, type MultimodalAttachment } from './services/chatService';
 import { textFixerService } from './services/textFixerService';
 import { ChatInput } from './components/ChatInput';
 import { useSettingsStore } from './store/useSettingsStore'; 
@@ -19,7 +20,7 @@ interface Message {
   text: string;
   sender: 'user' | 'ai';
   time: string;
-  imageUrl?: string;
+  attachmentUrl?: string; // 💡 修正: imageUrl を attachmentUrl に変更
 }
 
 export default function App() {
@@ -85,7 +86,7 @@ export default function App() {
       setCurrentSessionId(targetSessionId);
       const { data, error } = await supabase
         .from('chat_messages')
-        .select('id, text, sender, created_at, image_url')
+        .select('id, text, sender, created_at, attachment_url') // 💡 修正: image_url を attachment_url に変更
         .eq('session_id', targetSessionId)
         .order('created_at', { ascending: true });
       if (error) throw error;
@@ -96,7 +97,7 @@ export default function App() {
           text: msg.text,
           sender: msg.sender as 'user' | 'ai',
           time: new Date(msg.created_at).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
-          imageUrl: msg.image_url || undefined
+          attachmentUrl: msg.attachment_url || undefined // 💡 修正: msg.image_url を msg.attachment_url に変更
         })));
       }
       setSidebarOpen(false);
@@ -127,9 +128,10 @@ export default function App() {
     }
   };
 
-  const handleSend = async (textToSend?: string, isVoice: boolean = false, imageToSend?: MultimodalImage) => {
+  // 💡 修正: imageToSend を attachmentToSend に変更
+  const handleSend = async (textToSend?: string, isVoice: boolean = false, attachmentToSend?: MultimodalAttachment) => {
     const targetText = textToSend || inputText;
-    if (!targetText.trim() && !imageToSend) return; 
+    if (!targetText.trim() && !attachmentToSend) return; 
     
     const isActuallyVoice = isVoice || isVoiceMode;
 
@@ -140,7 +142,7 @@ export default function App() {
     }
 
     if (messages.length === 0) {
-      const titleSource = targetText.trim() ? targetText : 'Image Upload';
+      const titleSource = targetText.trim() ? targetText : 'File Upload';
       const tempTitle = titleSource.length > 15 ? titleSource.slice(0, 15) + '...' : titleSource;
       
       const { error: sessionError } = await supabase
@@ -159,7 +161,7 @@ export default function App() {
       text: targetText,
       sender: 'user',
       time: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }),
-      imageUrl: imageToSend ? `data:${imageToSend.mimeType};base64,${imageToSend.base64}` : undefined
+      attachmentUrl: attachmentToSend ? `data:${attachmentToSend.mimeType};base64,${attachmentToSend.base64}` : undefined
     };
     setMessages(prev => [...prev, userMessage]);
     
@@ -167,9 +169,9 @@ export default function App() {
     setIsThinking(true);
     setIsVoiceMode(false); 
     
-    logEvent('diagnostic_run', { payload: { action: 'text_sent', hasImage: !!imageToSend } });
+    logEvent('diagnostic_run', { payload: { action: 'text_sent', hasAttachment: !!attachmentToSend } });
     try {
-      const response = await chatService.sendMessage(targetText, currentSessionId, imageToSend) as any;
+      const response = await chatService.sendMessage(targetText, currentSessionId, attachmentToSend) as any;
       
       const baseText = typeof response === 'string' ? response : response.aiText;
       const altText = typeof response === 'object' && response.altText ? response.altText : '';
@@ -476,12 +478,28 @@ export default function App() {
                         ? 'bg-blue-600/95 text-white rounded-tr-none border border-blue-500/50 shadow-blue-600/20' 
                         : 'bg-white/85 text-slate-700 rounded-tl-none border border-white/60 shadow-slate-200/50'
                     }`}>
-                      {msg.imageUrl && (
-                        <img 
-                          src={msg.imageUrl} 
-                          alt="Uploaded" 
-                          className="w-full max-w-[240px] rounded-xl mb-2 object-cover border border-white/20 shadow-sm bg-slate-100" 
-                        />
+                      {/* 💡 修正: 画像かファイルかで表示を出し分け */}
+                      {msg.attachmentUrl && (
+                        <div className="mb-2">
+                          {msg.attachmentUrl.match(/\.(jpeg|jpg|gif|png)$/i) || msg.attachmentUrl.startsWith('data:image/') ? (
+                            <img 
+                              src={msg.attachmentUrl} 
+                              alt="Uploaded" 
+                              className="w-full max-w-[240px] rounded-xl object-cover border border-white/20 shadow-sm bg-slate-100" 
+                            />
+                          ) : (
+                            <a 
+                              href={msg.attachmentUrl} 
+                              target="_blank" 
+                              rel="noopener noreferrer" 
+                              className={`inline-flex items-center gap-2 text-xs font-bold underline px-3 py-2 rounded-lg border ${
+                                msg.sender === 'user' ? 'text-white bg-blue-700/50 border-blue-400' : 'text-blue-600 bg-white/50 border-slate-200 hover:text-blue-800'
+                              }`}
+                            >
+                              📎 添付ファイルを開く
+                            </a>
+                          )}
+                        </div>
                       )}
                       
                       <div className="min-w-0 w-full break-all whitespace-pre-wrap">
@@ -517,7 +535,6 @@ export default function App() {
                               : 'bg-white border border-slate-100 text-slate-400 hover:text-blue-500 hover:border-blue-100'
                           }`}
                         >
-                          {/* 💡 修正: 存在しない messageId を消去し、msg.id のみで判定 */}
                           {playingMessageId === msg.id ? (
                             <VolumeX size={12} className="animate-pulse" />
                           ) : (

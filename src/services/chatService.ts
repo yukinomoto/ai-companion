@@ -1,4 +1,3 @@
-// src/services/chatService.ts
 import { supabase } from '../lib/supabase';
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 import { memoryExtractor } from './memoryExtractor';
@@ -11,7 +10,7 @@ const MATCH_THRESHOLD = 0.3;
 const MATCH_COUNT = 5;
 const HISTORY_LIMIT = 6;
 
-export interface MultimodalImage {
+export interface MultimodalAttachment {
   base64: string;
   mimeType: string;
 }
@@ -31,44 +30,56 @@ const base64ToBlob = (base64: string, mimeType: string): Blob => {
   return new Blob([byteArray], { type: mimeType });
 };
 
-const uploadImageToStorage = async (image: MultimodalImage, sessionId: string): Promise<string | null> => {
+const getExtensionFromMimeType = (mimeType: string): string => {
+  if (mimeType === 'application/pdf') return 'pdf';
+  if (mimeType === 'text/csv') return 'csv';
+  if (mimeType === 'text/plain') return 'txt';
+  return 'jpg';
+};
+
+const uploadAttachmentToStorage = async (attachment: MultimodalAttachment, sessionId: string): Promise<string | null> => {
   try {
-    const blob = base64ToBlob(image.base64, image.mimeType);
-    const fileName = `${sessionId}/${Date.now()}.jpg`;
+    const blob = base64ToBlob(attachment.base64, attachment.mimeType);
+    const ext = getExtensionFromMimeType(attachment.mimeType);
+    const fileName = `${sessionId}/${Date.now()}.${ext}`;
 
     const { error: uploadError } = await supabase.storage
-      .from('chat-images')
+      .from('chat-attachments')
       .upload(fileName, blob, {
-        contentType: image.mimeType,
+        contentType: attachment.mimeType,
         upsert: true
       });
 
     if (uploadError) throw uploadError;
 
     const { data: publicUrlData } = supabase.storage
-      .from('chat-images')
+      .from('chat-attachments')
       .getPublicUrl(fileName);
 
     return publicUrlData.publicUrl;
   } catch (error) {
-    console.error('⚠️ Supabase Storageへの画像アップロードに失敗しました:', error);
+    console.error('⚠️ Supabase Storageへのファイルアップロードに失敗しました:', error);
     return null;
   }
 };
 
 export const chatService = {
-  sendMessage: async (userText: string, sessionId: string, image?: MultimodalImage): Promise<ChatResponse> => {
+  sendMessage: async (userText: string, sessionId: string, attachment?: MultimodalAttachment): Promise<ChatResponse> => {
     try {
-      let publicImageUrl: string | null = null;
-      if (image) {
-        publicImageUrl = await uploadImageToStorage(image, sessionId);
+      let publicAttachmentUrl: string | null = null;
+      let messagePrefix = '';
+
+      if (attachment) {
+        publicAttachmentUrl = await uploadAttachmentToStorage(attachment, sessionId);
+        const isImage = attachment.mimeType.startsWith('image/');
+        messagePrefix = isImage ? '[画像を送信しました] ' : '[ファイルを送信しました] ';
       }
 
       await supabase.from('chat_messages').insert({ 
         sender: 'user', 
-        text: image ? `[画像を送信しました] ${userText}` : userText, 
+        text: attachment ? `${messagePrefix}${userText}` : userText, 
         session_id: sessionId,
-        image_url: publicImageUrl 
+        attachment_url: publicAttachmentUrl
       });
 
       let webContext = null;
@@ -192,11 +203,9 @@ export const chatService = {
       };
 
       const promptString = JSON.stringify(structuredPayload, null, 2);
-      const isMultimodal = !!image;
+      const isMultimodal = !!attachment;
       
-      // ====================================================
       // 5. 役割A（Gemini）による応答生成
-      // ====================================================
       const aiText = await apiWrapper.execute('GEMINI', isMultimodal, async () => {
         const modelName = isMultimodal ? API_MODELS.GEMINI.MULTIMODAL : API_MODELS.GEMINI.PRIMARY;
         const apiKey = isMultimodal ? apiConfig.getGeminiMultimodalKey() : apiConfig.getGeminiApiKey();
@@ -206,9 +215,9 @@ export const chatService = {
         const ai = new GoogleGenAI({ apiKey });
         const contentsParts: any[] = [{ text: promptString }];
         
-        if (image) {
+        if (attachment) {
           contentsParts.push({
-            inlineData: { data: image.base64, mimeType: image.mimeType }
+            inlineData: { data: attachment.base64, mimeType: attachment.mimeType }
           });
         }
 
@@ -228,27 +237,20 @@ export const chatService = {
         return response.text || 'ごめんなさい、ちょっと考え込んでしまいました。';
       });
 
-      // ====================================================
-      // 5.5. 役割B（Gemini思考拡張）による別視点の生成（直列）
-      // ====================================================
+      // 5.5. 役割B（Gemini思考拡張）による別視点の生成
       let altText = '';
       try {
         altText = await apiWrapper.execute('GEMINI', false, async () => {
           const apiKey = apiConfig.getGeminiApiKey();
-          if (!apiKey) return ''; // キーがなければスキップ
+          if (!apiKey) return ''; 
           
           const ai = new GoogleGenAI({ apiKey });
-          
-          const bPayload = JSON.stringify({
-            user_input: userText,
-            ai_response: aiText
-          }, null, 2);
+          const bPayload = JSON.stringify({ user_input: userText, ai_response: aiText }, null, 2);
 
           const response = await ai.models.generateContent({
             model: API_MODELS.GEMINI.PRIMARY, 
             contents: [{ text: bPayload }],
             config: {
-              // 💡 修正: prompts.ts から EXPAND_MODE を呼び出す
               systemInstruction: SYSTEM_PROMPTS.EXPAND_MODE,
               temperature: 0.7, 
               safetySettings: [
@@ -266,25 +268,18 @@ export const chatService = {
         altText = ''; 
       }
 
-      // ====================================================
       // 6. データベース保存と裏方タスクの実行
-      // ====================================================
-      
-      // AとBのテキストを結合
       const combinedTextToSave = altText ? `${aiText}\n\n${altText}` : aiText;
 
-      // 結合したテキストをDBに保存
       await supabase.from('chat_messages').insert({ 
         sender: 'ai', 
         text: combinedTextToSave, 
         session_id: sessionId 
       });
 
-      // 記憶抽出やフレーズ抽出にも、Bの別視点が含まれた結合テキストを渡す
       memoryExtractor.processConversation(userText, combinedTextToSave).catch(console.error);
       phraseExtractor.processL2Phrases(userText, combinedTextToSave, sessionId).catch(console.error);
 
-      // フロントエンド（App.tsx）には、AとBを分けて返す
       return { aiText, altText };
 
     } catch (error: any) {

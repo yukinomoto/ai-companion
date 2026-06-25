@@ -1,7 +1,6 @@
-// src/components/ChatInput.tsx
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, ImagePlus, X } from 'lucide-react';
-import { type MultimodalImage } from '../services/chatService';
+import { Send, Paperclip, X, FileText } from 'lucide-react';
+import { type MultimodalAttachment } from '../services/chatService';
 
 interface ChatInputProps {
   inputText: string;
@@ -9,7 +8,12 @@ interface ChatInputProps {
   isTranscribing: boolean;
   isThinking: boolean;
   isRecording: boolean;
-  onSend: (text?: string, isVoice?: boolean, image?: MultimodalImage) => void;
+  onSend: (text?: string, isVoice?: boolean, attachment?: MultimodalAttachment) => void;
+}
+
+interface AttachmentState extends MultimodalAttachment {
+  name: string;
+  isImage: boolean;
 }
 
 export function ChatInput({ 
@@ -20,21 +24,19 @@ export function ChatInput({
   isRecording, 
   onSend 
 }: ChatInputProps) {
-  const [selectedImage, setSelectedImage] = useState<MultimodalImage | null>(null);
+  const [selectedAttachment, setSelectedAttachment] = useState<AttachmentState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // テキストの入力内容に合わせて最大4行まで高さを動的に自動拡張する
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
 
-    textarea.style.height = 'auto'; // 一度リセット
-    const nextHeight = Math.min(textarea.scrollHeight, 120); // 最大高さを少し余裕を持たせる
+    textarea.style.height = 'auto';
+    const nextHeight = Math.min(textarea.scrollHeight, 120);
     textarea.style.height = `${nextHeight}px`;
   }, [inputText]);
 
-  // 画像圧縮処理
   const compressImage = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -74,29 +76,57 @@ export function ChatInput({
     });
   };
 
+  const readFileAsBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = error => reject(error);
+      reader.readAsDataURL(file);
+    });
+  };
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
-      const compressedDataUrl = await compressImage(file);
-      const base64 = compressedDataUrl.split(',')[1];
+      const isImage = file.type.startsWith('image/');
+      let base64 = '';
+      let mimeType = file.type;
+
+      if (isImage) {
+        const compressedDataUrl = await compressImage(file);
+        base64 = compressedDataUrl.split(',')[1];
+        mimeType = 'image/jpeg';
+      } else {
+        base64 = await readFileAsBase64(file);
+      }
       
-      setSelectedImage({
+      setSelectedAttachment({
         base64,
-        mimeType: 'image/jpeg',
+        mimeType,
+        name: file.name,
+        isImage
       });
     } catch (error) {
-      console.error('画像圧縮エラー:', error);
-      alert('画像の処理に失敗しました。');
+      console.error('ファイル処理エラー:', error);
+      alert('ファイルの処理に失敗しました。');
     }
     
     e.target.value = '';
   };
 
   const handleSend = () => {
-    onSend(inputText, false, selectedImage || undefined);
-    setSelectedImage(null);
+    const sendData = selectedAttachment ? {
+      base64: selectedAttachment.base64,
+      mimeType: selectedAttachment.mimeType
+    } : undefined;
+
+    onSend(inputText, false, sendData);
+    setSelectedAttachment(null);
     setInputText('');
   };
 
@@ -110,20 +140,28 @@ export function ChatInput({
   };
 
   const disabled = isRecording || isTranscribing || isThinking;
-  const canSend = !!inputText.trim() || !!selectedImage;
+  const canSend = !!inputText.trim() || !!selectedAttachment;
 
   return (
     <div className="w-full relative flex flex-col gap-3">
-      {/* 🖼️ 画像プレビュー領域 */}
-      {selectedImage && (
-        <div className="relative inline-block w-24 h-24 ml-4 animate-in fade-in slide-in-from-bottom-2">
-          <img 
-            src={`data:${selectedImage.mimeType};base64,${selectedImage.base64}`} 
-            alt="preview" 
-            className="w-full h-full object-cover rounded-2xl border-2 border-slate-200 shadow-md bg-white" 
-          />
+      {selectedAttachment && (
+        <div className="relative inline-block ml-4 animate-in fade-in slide-in-from-bottom-2">
+          {selectedAttachment.isImage ? (
+            <img 
+              src={`data:${selectedAttachment.mimeType};base64,${selectedAttachment.base64}`} 
+              alt="preview" 
+              className="w-24 h-24 object-cover rounded-2xl border-2 border-slate-200 shadow-md bg-white" 
+            />
+          ) : (
+            <div className="w-24 h-24 flex flex-col items-center justify-center bg-white rounded-2xl border-2 border-slate-200 shadow-md p-2 text-slate-600">
+              <FileText size={28} className="mb-1 text-blue-500" />
+              <span className="text-[10px] text-center break-all line-clamp-2 leading-tight font-medium">
+                {selectedAttachment.name}
+              </span>
+            </div>
+          )}
           <button 
-            onClick={() => setSelectedImage(null)}
+            onClick={() => setSelectedAttachment(null)}
             className="absolute -top-2 -right-2 bg-slate-800 text-white p-1.5 rounded-full hover:bg-slate-700 transition-colors shadow-lg z-10"
           >
             <X size={12} strokeWidth={3} />
@@ -131,39 +169,33 @@ export function ChatInput({
         </div>
       )}
 
-      {/* ⌨️ テキスト入力＆ボタン領域 */}
-      {/* 💡 修正ポイント: p-1 (上下左右4pxの隙間) と rounded-3xl (24pxの角丸) を指定 */}
       <div className="w-full relative flex items-end group bg-slate-50 border border-slate-200 focus-within:border-blue-300 focus-within:ring-4 focus-within:ring-blue-500/5 rounded-3xl p-1 transition-all shadow-sm">
         <input 
           type="file" 
-          accept="image/*" 
+          accept="image/*,.pdf,.csv,.txt" 
           className="hidden" 
           ref={fileInputRef} 
           onChange={handleFileChange} 
         />
         
-        {/* 画像選択ボタン */}
-        {/* 💡 修正ポイント: w-10 h-10 (40px) の正円に固定し、余計なmarginを削除 */}
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled}
           className={`w-10 h-10 flex items-center justify-center transition-colors rounded-full shrink-0 ${
-            selectedImage ? 'text-blue-500 bg-blue-50' : 
+            selectedAttachment ? 'text-blue-500 bg-blue-50' : 
             'text-slate-400 hover:text-blue-500 hover:bg-slate-100'
           } disabled:opacity-50`}
         >
-          <ImagePlus size={20} strokeWidth={2} />
+          <Paperclip size={20} strokeWidth={2} />
         </button>
 
-        {/* 自動拡張テキストエリア */}
-        {/* 💡 修正ポイント: py-2 (上下8px) に変更。文字(約24px)+上下16px = 高さ40px となりボタンと完全に一致する */}
         <textarea 
           ref={textareaRef}
           rows={1}
           placeholder={
             isTranscribing ? "Transcribing voice..." :
             isThinking ? "Thinking..." :
-            isRecording ? "Listening..." : "Message or upload image..."
+            isRecording ? "Listening..." : "Message or upload file..."
           }
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
@@ -174,8 +206,6 @@ export function ChatInput({
           }`}
         />
         
-        {/* 送信ボタン */}
-        {/* 💡 修正ポイント: w-10 h-10 (40px) の正円に固定 */}
         <button 
           onClick={handleSend}
           disabled={disabled || !canSend}
