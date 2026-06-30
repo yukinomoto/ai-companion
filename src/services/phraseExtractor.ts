@@ -107,6 +107,13 @@ export const phraseExtractor = {
           nodes.forEach((n: any) => {
             if (!n.phrase) return;
             const key = n.phrase.trim().toLowerCase();
+            
+            // 💡 LLMの暴走対策: 20文字以上の異常な長さのフレーズはスパムとみなして破棄
+            if (key.length > 20) {
+              console.warn(`🛡️ 異常な長さのフレーズをブロックしました: ${key}`);
+              return; 
+            }
+            
             if (!nodeSeenPhrases.has(key)) {
               nodeSeenPhrases.add(key);
               finalNodes.push({ ...n, source });

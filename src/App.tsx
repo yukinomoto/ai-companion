@@ -169,7 +169,7 @@ export default function App() {
     setIsThinking(true);
     setIsVoiceMode(false); 
     
-    logEvent('diagnostic_run', { payload: { action: 'text_sent', hasAttachment: !!attachmentToSend } });
+    logEvent('diagnostic_run', { payload: { action: 'text_sent', text: targetText, hasAttachment: !!attachmentToSend } });
     try {
       const response = await chatService.sendMessage(targetText, currentSessionId, attachmentToSend) as any;
       
