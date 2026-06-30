@@ -5,6 +5,7 @@ import { phraseExtractor } from './phraseExtractor';
 import { SYSTEM_PROMPTS } from '../prompts';
 import { apiConfig, API_MODELS } from '../config/apiConfig';
 import { apiWrapper } from '../utils/apiWrapper';
+import { useLoggerStore } from '../store/useLoggerStore'; // 💡 ログストアをインポート
 
 const MATCH_THRESHOLD = 0.3;
 const MATCH_COUNT = 5;
@@ -65,6 +66,9 @@ const uploadAttachmentToStorage = async (attachment: MultimodalAttachment, sessi
 
 export const chatService = {
   sendMessage: async (userText: string, sessionId: string, attachment?: MultimodalAttachment): Promise<ChatResponse> => {
+    // 💡 ログ関数の取得
+    const logEvent = useLoggerStore.getState().logEvent;
+
     try {
       let publicAttachmentUrl: string | null = null;
       let messagePrefix = '';
@@ -112,6 +116,16 @@ export const chatService = {
             const groqData = await groqRes.json();
             return JSON.parse(groqData.choices[0].message.content);
           });
+
+          // 💡 意図判定の結果をログに記録
+          if (intent) {
+            logEvent('intent_parsed', {
+              payload: {
+                requires_search: intent.requires_search,
+                search_query: intent.search_query || null
+              }
+            });
+          }
 
           if (intent.requires_search && intent.search_query && apiConfig.getTavilyApiKey()) {
             await apiWrapper.execute('TAVILY', false, async () => {
@@ -174,6 +188,18 @@ export const chatService = {
               query_embedding: userVector,
               match_threshold: MATCH_THRESHOLD,
               match_count: MATCH_COUNT
+            });
+
+            // 💡 記憶の引き出し結果をログに記録
+            logEvent('memory_retrieved', {
+              payload: {
+                hit_count: memories ? memories.length : 0,
+                retrieved_items: memories ? memories.map((m: any) => ({
+                  topic: m.topic_name,
+                  category: m.category,
+                  score: m.strength_score
+                })) : []
+              }
             });
 
             if (!error && memories && memories.length > 0) {

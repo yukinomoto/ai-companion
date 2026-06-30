@@ -2,13 +2,11 @@
 import { supabase } from '../lib/supabase';
 import { GoogleGenAI, Type, type Schema } from '@google/genai';
 import { SYSTEM_PROMPTS } from '../prompts';
+import { useLoggerStore } from '../store/useLoggerStore'; // 💡 ログストアをインポート
 
 const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
 const ai = new GoogleGenAI({ apiKey: geminiApiKey || '' });
 
-// ---------------------------------------------------------
-// ⚙️ 定数定義（マジックナンバー排除原則）
-// ---------------------------------------------------------
 const SCORE_INCREMENT = 10.0;
 const SCORE_MAX = 100.0;
 const SCORE_INITIAL = 10.0;
@@ -17,6 +15,9 @@ const THRESHOLD_INTEREST = 50.0;
 
 export const memoryExtractor = {
   processConversation: async (userMessage: string, aiResponse: string) => {
+    // 💡 ログ関数の取得
+    const logEvent = useLoggerStore.getState().logEvent;
+
     if (!geminiApiKey) {
       console.warn('Gemini API Keyがないため、記憶の抽出をスキップしました。');
       return;
@@ -33,7 +34,6 @@ export const memoryExtractor = {
           properties: {
             topic_name: { 
               type: Type.STRING, 
-              // 💡 ここを修正：固有名詞や「誰の」を明確にするよう指示
               description: "トピックの具体的で一意な名前。単なる「名前」「仕事」のような曖昧な単語は避け、「ユーザーの名前」「野元勇希」「Reactの開発」など、後から検索して他と混同しない固有の名称にすること" 
             },
             summary: { 
@@ -75,14 +75,9 @@ export const memoryExtractor = {
           const embedResponse = await ai.models.embedContent({
             model: 'gemini-embedding-2', 
             contents: embedText,
-            // 💡 復活：DBの限界に合わせて出力サイズを768次元に制限する
-            config: {
-              outputDimensionality: 768 
-            }
+            config: { outputDimensionality: 768 }
           });
-          
           embeddingVector = embedResponse.embeddings?.[0]?.values;
-          
         } catch (embedError) {
           console.warn(`⚠️ ベクトルの取得APIエラー (${item.topic_name}):`, embedError);
           continue;
@@ -93,9 +88,10 @@ export const memoryExtractor = {
           continue; 
         }
 
+        // 💡 既存ノード（Before状態）の取得
         const { data: existingNode, error: fetchError } = await supabase
           .from('user_nodes')
-          .select('id, strength_score, mention_count')
+          .select('id, topic_name, summary, category, strength_score, mention_count') // 💡 summaryとcategoryもBefore記録のために取得
           .eq('topic_name', item.topic_name)
           .maybeSingle();
 
@@ -109,7 +105,6 @@ export const memoryExtractor = {
           const newCategory = newScore >= THRESHOLD_VALUE ? 'value' 
                             : (newScore >= THRESHOLD_INTEREST ? 'interest' : item.category);
 
-          // 💡 計測のため error オブジェクトを受け取る
           const { error: updateError } = await supabase
             .from('user_nodes')
             .update({
@@ -122,15 +117,30 @@ export const memoryExtractor = {
             })
             .eq('id', existingNode.id);
             
-          // 💡 エラー内容を詳細にログ出力する
           if (updateError) {
             console.error(`⚠️ DB更新エラー詳細 (${item.topic_name}):`, updateError.message, updateError.details);
             continue;
           }
             
+          // 💡 更新（編集）された場合：Before と After を比較可能な形でログに流す
+          logEvent('memory_updated', {
+            payload: {
+              topic: item.topic_name,
+              before_state: {
+                summary: existingNode.summary,
+                category: existingNode.category,
+                score: existingNode.strength_score
+              },
+              after_state: {
+                summary: item.summary,
+                category: newCategory,
+                score: newScore
+              }
+            }
+          });
           console.log(`🧠 記憶を更新・強化しました: ${item.topic_name} (スコア: ${newScore})`);
+
         } else {
-          // 💡 計測のため error オブジェクトを受け取る
           const { error: insertError } = await supabase
             .from('user_nodes')
             .insert({
@@ -144,12 +154,22 @@ export const memoryExtractor = {
               last_observed_at: new Date().toISOString()
             });
             
-          // 💡 エラー内容を詳細にログ出力する
           if (insertError) {
             console.error(`⚠️ DB登録エラー詳細 (${item.topic_name}):`, insertError.message, insertError.details);
             continue;
           }
             
+          // 💡 新規追加の場合：After のみをログに流す
+          logEvent('memory_added', {
+            payload: {
+              topic: item.topic_name,
+              after_state: {
+                summary: item.summary,
+                category: item.category,
+                score: SCORE_INITIAL
+              }
+            }
+          });
           console.log(`🌱 新しい記憶を記録しました: ${item.topic_name}`);
         }
       }
