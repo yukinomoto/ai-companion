@@ -174,7 +174,9 @@ export const chatService = {
 
       // 3. 過去のコア証拠（長期記憶）の取得
       try {
-        memoriesData = await memoryService.retrieveRelevantEvidence(userText);
+        // 💡 修正: 取得済みの短期履歴（recentMessagesData）を第2引数として引き渡す
+        memoriesData = await memoryService.retrieveRelevantEvidence(userText, recentMessagesData);
+        
         logEvent('memory_retrieved', {
           payload: {
             hit_count: memoriesData.length,

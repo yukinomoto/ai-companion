@@ -169,15 +169,30 @@ export const memoryService = {
   },
 
 /**
-   * ユーザーの入力から関連するコア証拠（代表ログ）を検索・取得する
+   * ユーザーの入力と直近の履歴から関連するコア証拠（代表ログ）を検索・取得する
    */
-  retrieveRelevantEvidence: async (userMessage: string): Promise<string[]> => {
+  retrieveRelevantEvidence: async (userMessage: string, history: any[] = []): Promise<string[]> => {
     const apiKey = apiConfig.getGeminiApiKey();
     if (!apiKey) return [];
 
     try {
       const ai = new GoogleGenAI({ apiKey });
-      const prompt = `以下のユーザーの発話から、記憶のインデックスとなる「重要な名詞」「固有名詞」「トピック」を抽出してください。\n\n発話: "${userMessage}"`;
+      
+      // 💡 直近の短期記憶（履歴）をテキスト化してプロンプトに組み込む
+      const historyContext = history.length > 0 
+        ? history.map(h => `${h.role}: ${h.content}`).join('\n')
+        : 'なし';
+
+      const prompt = `あなたは長期記憶検索のためのプロセッサです。
+直近の会話履歴とユーザーの最新の発話を深く分析し、過去の長期記憶から検索すべき「重要な名詞」「固有名詞」「トピック」を抽出してください。
+
+【重要】ユーザーが「あれ」「それ」「本当にわからない？」などの指示語や文脈依存の表現を使っている場合は、直近の会話履歴からその対象（例: ユーザーの名前に関する話など）を補完し、検索に適した具体的なキーワード（例: 「名前」など）に変換して抽出してください。
+
+【直近の会話履歴】
+${historyContext}
+
+【ユーザーの最新の発話】
+"${userMessage}"`;
 
       const responseSchema: Schema = {
         type: Type.ARRAY,
@@ -206,7 +221,7 @@ export const memoryService = {
         const normalized = textNormalizer.normalizePhrase(keyword);
         if (!normalized) continue;
 
-        // 💡 改善: クライアント側でのテーブル直接結合を廃止し、セキュリティ定義関数(RPC)へ完全移行
+        // 💡 前ステップで作成した確実な管理者権限RPCで検索
         const { data: rpcRows, error: rpcError } = await supabase.rpc('retrieve_core_evidence', {
           p_normalized: normalized
         });
