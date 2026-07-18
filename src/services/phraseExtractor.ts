@@ -16,12 +16,10 @@ export const phraseExtractor = {
     try {
       const conversationContext = `ユーザー: ${userText}\nAI: ${aiText}`;
 
-      // 🛡️ APIラッパーで保護（429エラー等の過多制限時は自動でキーを切り替えてリトライ）
       await apiWrapper.execute('GROQ', false, async () => {
         const currentGroqKey = apiConfig.getGroqApiKey();
         if (!currentGroqKey) throw new Error('Groq API Key is missing');
 
-        // 💡 現在のセッションのメッセージ数を取得し、初回（1往復目 = 2件以下）か判定
         const { count } = await supabase
           .from('chat_messages')
           .select('*', { count: 'exact', head: true })
@@ -29,7 +27,6 @@ export const phraseExtractor = {
 
         const isFirstTurn = (count || 0) <= 2;
 
-        // 🏎️ 常に実行するタスク（ユーザー側とAI側のグラフ抽出）
         const fetchPromises = [
           fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
@@ -59,7 +56,6 @@ export const phraseExtractor = {
           })
         ];
 
-        // 🟦 初回ターンの場合のみ、タイトル生成タスクを動的に追加
         if (isFirstTurn) {
           fetchPromises.push(
             fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -80,12 +76,10 @@ export const phraseExtractor = {
 
         const responses = await Promise.all(fetchPromises);
 
-        // 💡 429エラーをラッパーに検知させるためにステータスを付与してthrowする
         if (!responses[0].ok) throw Object.assign(new Error(`User Graph Error: ${responses[0].status}`), { status: responses[0].status });
         if (!responses[1].ok) throw Object.assign(new Error(`AI Graph Error: ${responses[1].status}`), { status: responses[1].status });
         if (isFirstTurn && !responses[2].ok) throw Object.assign(new Error(`Title Fetch Error: ${responses[2].status}`), { status: responses[2].status });
 
-        // レスポンスの解析
         const [userData, aiData, titleData] = await Promise.all([
           responses[0].json(),
           responses[1].json(),
@@ -95,7 +89,6 @@ export const phraseExtractor = {
         const userGraphResult = JSON.parse(userData.choices[0].message.content);
         const aiGraphResult = JSON.parse(aiData.choices[0].message.content);
 
-        // 1. タイトルの上書き（初回のみ実行）
         let finalTitle = 'Retained';
         if (isFirstTurn && titleData) {
           const titleResult = JSON.parse(titleData.choices[0].message.content);
@@ -105,7 +98,6 @@ export const phraseExtractor = {
           }
         }
 
-        // 2. データの統合と強制マッピング
         const finalNodes: any[] = [];
         const finalEdges: any[] = [];
         const nodeSeenPhrases = new Set<string>();
@@ -115,6 +107,13 @@ export const phraseExtractor = {
           nodes.forEach((n: any) => {
             if (!n.phrase) return;
             const key = n.phrase.trim().toLowerCase();
+            
+            // 💡 LLMの暴走対策: 20文字以上の異常な長さのフレーズはスパムとみなして破棄
+            if (key.length > 20) {
+              console.warn(`🛡️ 異常な長さのフレーズをブロックしました: ${key}`);
+              return; 
+            }
+            
             if (!nodeSeenPhrases.has(key)) {
               nodeSeenPhrases.add(key);
               finalNodes.push({ ...n, source });
@@ -143,7 +142,6 @@ export const phraseExtractor = {
         addEdges(userGraphResult.edges);
         addEdges(aiGraphResult.edges);
 
-        // 3. Supabaseへ安全に配送
         if (finalNodes.length > 0) {
           const { error } = await supabase.rpc('save_phrase_network_v3', {
             p_nodes: finalNodes,
@@ -161,7 +159,15 @@ export const phraseExtractor = {
           }
           console.log(`========================================`);
 
-          logEvent('diagnostic_run', { payload: { note: 'L2 Split Saved', title: finalTitle, nodes_count: finalNodes.length, title_updated: isFirstTurn } });
+          // 💡 既存の `diagnostic_run` を、より意味のある専用タグ `phrase_extracted` に変更し、抽出結果を記録
+          logEvent('phrase_extracted', { 
+            payload: { 
+              note: 'L2 Split Saved', 
+              title: finalTitle, 
+              nodes_count: finalNodes.length, 
+              extracted_phrases: finalNodes.map(n => n.phrase) // 💡 どんなフレーズが抜かれたかを配列で保存
+            } 
+          });
         }
       });
 
