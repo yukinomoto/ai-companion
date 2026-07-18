@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { GoogleGenAI, Type, type Schema } from '@google/genai';
 import { textNormalizer } from '../utils/textNormalizer';
 import { apiConfig, API_MODELS, MODEL_CONFIGS } from '../config/apiConfig';
+import { SYSTEM_PROMPTS } from '../prompts'; // 💡 外部プロンプトを一括インポート
 
 export const memoryService = {
   /**
@@ -15,18 +16,9 @@ export const memoryService = {
     try {
       const ai = new GoogleGenAI({ apiKey });
       
-      // 💡 改善: 将来のノイズ誤ヒットを防ぐため、動的・感情的な抽象名詞の抽出をプロンプトレベルで完全禁止
-      const prompt = `以下のユーザーの発話から、長期記憶のインデックス（検索タグ）となるキーワードを抽出してください。
-
-【抽出のゴール】
-ユーザーが何について話しているのか、後から特定の「話題」で一本釣り検索できるような名詞カテゴリを特定することです。
-
-【抽出ルール】
-1. 具体的な固有名詞（例: 「ユウキ」「ノモト」）に加え、それが属する具体的な客観的名詞カテゴリ（例: 「名前」「呼び方」）を抽出してください。
-2. 【厳格ルール】動詞、形容詞、および動作や一時的な感情・スタンスを表す抽象名詞（例: 「希望」「親しみ」「考え」「思う」「話す」「会話」「挨拶」など）は、将来の検索で深刻なノイズ（誤ヒット）になるため【絶対に抽出しないでください】。
-3. 抽出するキーワードは、独立した「純粋な名詞・概念」のみに限定してください。
-
-発話: "${userMessage}"`;
+      // 💡 改善: プロンプトファイルから取得し、プレースホルダーを動的に置換
+      const prompt = SYSTEM_PROMPTS.MEMORY_PHRASE_EXTRACTION
+        .replace('{{userMessage}}', userMessage);
 
       const responseSchema: Schema = {
         type: Type.ARRAY,
@@ -194,24 +186,25 @@ export const memoryService = {
         ? history.map(h => `${h.role}: ${h.content}`).join('\n')
         : 'なし';
 
-      // 💡 改善: 「名前」というキーワードだけでなく、過去に登録されたであろう類義語（呼び方、ニックネームなど）へクエリ拡張を行う指示を追加
-      const prompt = `あなたは長期記憶検索のためのプロセッサです。
-直近の会話履歴とユーザーの最新の発話を深く分析し、過去の長期記憶から検索すべき「重要な名詞」「固有名詞」「トピック」を抽出してください。
-
-【指示語の補完とクエリ拡張】
-1. ユーザーが「あれ」「それ」などの指示語を使っている場合は、直近の会話履歴からその対象（例: 「名前」など）を具体化してください。
-2. 抽出するキーワードは1つに絞らず、データベースのインデックスにヒットしやすいよう、関連する類義語やカテゴリ名（例: 「名前」が対象なら、["名前", "ユーザー名", "呼び方", "ニックネーム"] など）を広めに複数抽出してください。
-
-【直近の会話履歴】
-${historyContext}
-
-【ユーザーの最新の発話】
-"${userMessage}"`;
+      // 💡 改善: プロンプトファイルから取得し、プレースホルダーを動的に一括置換
+      const prompt = SYSTEM_PROMPTS.MEMORY_KEYWORD_AND_TIMELINE_DETECTION
+        .replace('{{historyContext}}', historyContext)
+        .replace('{{userMessage}}', userMessage);
 
       const responseSchema: Schema = {
-        type: Type.ARRAY,
-        description: "検索キーワードのリスト",
-        items: { type: Type.STRING },
+        type: Type.OBJECT,
+        properties: {
+          keywords: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "検索キーワードのリスト"
+          },
+          include_raw_logs: {
+            type: Type.BOOLEAN,
+            description: "ユーザーが特定の日時、最後の実行時期、過去の回数、ライフログのタイムラインを求めていると判断した場合はtrue、単なる事実や設定の確認であればfalse"
+          }
+        },
+        required: ["keywords", "include_raw_logs"]
       };
 
       const response = await ai.models.generateContent({
@@ -224,7 +217,13 @@ ${historyContext}
         }
       });
 
-      const keywords: string[] = JSON.parse(response.text || '[]');
+      const result = JSON.parse(response.text || '{"keywords":[],"include_raw_logs":false}');
+      const keywords: string[] = result.keywords || [];
+      const includeRawLogs: boolean = result.include_raw_logs || false;
+
+      if (includeRawLogs) {
+        console.log(`⏱️  [記憶検索スタック] 時間軸・ライフログ検索モードが【ON】に設定されました。`);
+      }
       console.log(`🔍 [記憶検索スタック] 抽出された検索キーワード:`, keywords);
       
       if (keywords.length === 0) return [];
@@ -236,7 +235,8 @@ ${historyContext}
         if (!normalized) continue;
 
         const { data: rpcRows, error: rpcError } = await supabase.rpc('retrieve_core_evidence', {
-          p_normalized: normalized
+          p_normalized: normalized,
+          p_include_all: includeRawLogs
         });
 
         if (rpcError) {
@@ -245,7 +245,7 @@ ${historyContext}
         }
 
         if (!rpcRows || rpcRows.length === 0) {
-          console.log(`🔎 [記憶検索スタック] コア証拠ヒットなし: [${normalized}]`);
+          console.log(`🔎 [記憶検索スタック] 証拠ヒットなし: [${normalized}]`);
           continue;
         }
 
@@ -254,7 +254,12 @@ ${historyContext}
         rpcRows.forEach((row: any) => {
           const role = row.message_sender === 'user' ? 'ユーザー' : 'AI';
           const aiContextPrefix = row.ai_context_summary ? `[当時のAI文ベース: ${row.ai_context_summary}] ` : '';
-          coreLogs.add(`[関連トピック: ${row.normalized_phrase}] ${aiContextPrefix}${role}の発言: "${row.message_text}"`);
+          
+          const timeStamp = row.message_created_at 
+            ? `[日時: ${new Date(row.message_created_at).toLocaleString('ja-JP')}] ` 
+            : '';
+
+          coreLogs.add(`${timeStamp}[関連トピック: ${row.normalized_phrase}] ${aiContextPrefix}${role}の発言: "${row.message_text}"`);
         });
       }
 
