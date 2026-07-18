@@ -9,9 +9,10 @@ export const API_MODELS = {
     MULTIMODAL: 'gemini-3.5-flash',
   },
   GROQ: {
-    L2_EXTRACTOR: 'llama-4-8b-instant',
+    // 💡 404を回避し、JSON構造化の打率が最も高い確定プロダクションモデルへ変更
+    L2_EXTRACTOR: 'llama-3.3-70b-versatile',
     STT_WHISPER: 'whisper-large-v3',
-    TEXT_FIXER: 'llama-4-8b-instant',
+    TEXT_FIXER: 'llama-3.3-70b-versatile',
   },
   GOOGLE_TTS: {
     VOICE_NAME: 'ja-JP-Neural2-B',
@@ -19,7 +20,6 @@ export const API_MODELS = {
 };
 
 // 💡 【完全集約】APIに渡す挙動設定オブジェクトそのものを一元管理
-// 全てのGemini呼び出しでThinking levelをHigh(32768)にする共通設定
 export const MODEL_CONFIGS = {
   GEMINI: {
     DEFAULT_HIGH_THINKING: {
