@@ -1,7 +1,7 @@
+// src/services/chatService.ts
 import { supabase } from '../lib/supabase';
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
-import { memoryExtractor } from './memoryExtractor';
-import { phraseExtractor } from './phraseExtractor';
+import { memoryService } from './memoryService'; // 💡 新しい memoryService に変更
 import { SYSTEM_PROMPTS } from '../prompts';
 import { apiConfig, API_MODELS } from '../config/apiConfig';
 import { apiWrapper } from '../utils/apiWrapper';
@@ -75,12 +75,13 @@ export const chatService = {
         messagePrefix = isImage ? '[画像を送信しました] ' : '[ファイルを送信しました] ';
       }
 
-      await supabase.from('chat_messages').insert({ 
+      // 💡 修正: ユーザーメッセージを保存し、その id (UUID) を取得する
+      const { data: userMsgData } = await supabase.from('chat_messages').insert({ 
         sender: 'user', 
         text: attachment ? `${messagePrefix}${userText}` : userText, 
         session_id: sessionId,
         attachment_url: publicAttachmentUrl
-      });
+      }).select('id').single();
 
       let webContext = null;
       let memoriesData: any[] = [];
@@ -156,31 +157,8 @@ export const chatService = {
         console.error('履歴取得エラー:', e);
       }
 
-      // 3. ベクトル検索による長期記憶の取得
       try {
-        if (apiConfig.getGeminiApiKey()) {
-          const userVector = await apiWrapper.execute('GEMINI', false, async () => {
-            const ai = new GoogleGenAI({ apiKey: apiConfig.getGeminiApiKey() });
-            const embedResponse = await ai.models.embedContent({
-              model: 'gemini-embedding-2',
-              contents: userText,
-              config: { outputDimensionality: 768 }
-            });
-            return embedResponse.embeddings?.[0]?.values;
-          });
-
-          if (userVector) {
-            const { data: memories, error } = await supabase.rpc('match_user_nodes', {
-              query_embedding: userVector,
-              match_threshold: MATCH_THRESHOLD,
-              match_count: MATCH_COUNT
-            });
-
-            if (!error && memories && memories.length > 0) {
-              memoriesData = memories.map((m: any) => `・${m.topic_name} (${m.category}): ${m.summary}`);
-            }
-          }
-        }
+        memoriesData = await memoryService.retrieveRelevantEvidence(userText);
       } catch (e) {
         console.error('記憶の取得エラー:', e);
       }
@@ -271,14 +249,17 @@ export const chatService = {
       // 6. データベース保存と裏方タスクの実行
       const combinedTextToSave = altText ? `${aiText}\n\n${altText}` : aiText;
 
+      // AIの発言は履歴として保存するだけ
       await supabase.from('chat_messages').insert({ 
         sender: 'ai', 
         text: combinedTextToSave, 
         session_id: sessionId 
       });
 
-      memoryExtractor.processConversation(userText, combinedTextToSave).catch(console.error);
-      phraseExtractor.processL2Phrases(userText, combinedTextToSave, sessionId).catch(console.error);
+      // 💡 新しい記憶抽出処理を呼び出す（ユーザーの発言IDを渡す）
+      if (userMsgData?.id) {
+        memoryService.processConversation(userMsgData.id, userText).catch(console.error);
+      }
 
       return { aiText, altText };
 
