@@ -2,7 +2,7 @@
 import { supabase } from '../lib/supabase';
 import { GoogleGenAI, Type, type Schema } from '@google/genai';
 import { textNormalizer } from '../utils/textNormalizer';
-import { apiConfig, API_MODELS, MODEL_CONFIGS } from '../config/apiConfig'; // 💡 MODEL_CONFIGS をインポート
+import { apiConfig, API_MODELS, MODEL_CONFIGS } from '../config/apiConfig';
 
 export const memoryService = {
   /**
@@ -14,11 +14,16 @@ export const memoryService = {
 
     try {
       const ai = new GoogleGenAI({ apiKey });
-      const prompt = `以下のユーザーの発話から、記憶のインデックスとなる「重要な名詞」「固有名詞」「トピック」を抽出してください。\n\n発話: "${userMessage}"`;
+      
+      // 💡 改善: 固有名詞だけでなく、それが何に関する話かという「上位カテゴリ（名前、趣味など）」も同時に抽出させてインデックスを多重化する
+      const prompt = `以下のユーザーの発話から、記憶のインデックスとなるキーワードを抽出してください。
+単なる固有名詞（例: 「ユウキ」）だけでなく、それが何に関する話題であるかを表す一般的な概念・カテゴリ名（例: 「名前」「呼び方」など）も含めて、網羅的に抽出してください。
+
+発話: "${userMessage}"`;
 
       const responseSchema: Schema = {
         type: Type.ARRAY,
-        description: "抽出されたフレーズのリスト",
+        description: "抽出されたフレーズ・カテゴリのリスト",
         items: { type: Type.STRING },
       };
 
@@ -26,7 +31,7 @@ export const memoryService = {
         model: API_MODELS.GEMINI.PRIMARY,
         contents: prompt,
         config: {
-          ...MODEL_CONFIGS.GEMINI.DEFAULT_HIGH_THINKING, // 💡 思考設定オブジェクトをそのまま注入（生書き完全排除）
+          ...MODEL_CONFIGS.GEMINI.DEFAULT_HIGH_THINKING,
           responseMimeType: 'application/json',
           responseSchema: responseSchema,
         }
@@ -132,7 +137,7 @@ export const memoryService = {
         model: API_MODELS.GEMINI.PRIMARY,
         contents: prompt,
         config: {
-          ...MODEL_CONFIGS.GEMINI.DEFAULT_HIGH_THINKING, // 💡 思考設定オブジェクトをそのまま注入（生書き完全排除）
+          ...MODEL_CONFIGS.GEMINI.DEFAULT_HIGH_THINKING,
           responseMimeType: 'application/json',
           responseSchema: responseSchema,
         }
@@ -168,7 +173,7 @@ export const memoryService = {
     }
   },
 
-/**
+  /**
    * ユーザーの入力と直近の履歴から関連するコア証拠（代表ログ）を検索・取得する
    */
   retrieveRelevantEvidence: async (userMessage: string, history: any[] = []): Promise<string[]> => {
@@ -178,15 +183,17 @@ export const memoryService = {
     try {
       const ai = new GoogleGenAI({ apiKey });
       
-      // 💡 直近の短期記憶（履歴）をテキスト化してプロンプトに組み込む
       const historyContext = history.length > 0 
         ? history.map(h => `${h.role}: ${h.content}`).join('\n')
         : 'なし';
 
+      // 💡 改善: 「名前」というキーワードだけでなく、過去に登録されたであろう類義語（呼び方、ニックネームなど）へクエリ拡張を行う指示を追加
       const prompt = `あなたは長期記憶検索のためのプロセッサです。
 直近の会話履歴とユーザーの最新の発話を深く分析し、過去の長期記憶から検索すべき「重要な名詞」「固有名詞」「トピック」を抽出してください。
 
-【重要】ユーザーが「あれ」「それ」「本当にわからない？」などの指示語や文脈依存の表現を使っている場合は、直近の会話履歴からその対象（例: ユーザーの名前に関する話など）を補完し、検索に適した具体的なキーワード（例: 「名前」など）に変換して抽出してください。
+【指示語の補完とクエリ拡張】
+1. ユーザーが「あれ」「それ」などの指示語を使っている場合は、直近の会話履歴からその対象（例: 「名前」など）を具体化してください。
+2. 抽出するキーワードは1つに絞らず、データベースのインデックスにヒットしやすいよう、関連する類義語やカテゴリ名（例: 「名前」が対象なら、["名前", "ユーザー名", "呼び方", "ニックネーム"] など）を広めに複数抽出してください。
 
 【直近の会話履歴】
 ${historyContext}
@@ -221,7 +228,6 @@ ${historyContext}
         const normalized = textNormalizer.normalizePhrase(keyword);
         if (!normalized) continue;
 
-        // 💡 前ステップで作成した確実な管理者権限RPCで検索
         const { data: rpcRows, error: rpcError } = await supabase.rpc('retrieve_core_evidence', {
           p_normalized: normalized
         });
@@ -240,7 +246,7 @@ ${historyContext}
 
         rpcRows.forEach((row: any) => {
           const role = row.message_sender === 'user' ? 'ユーザー' : 'AI';
-          const aiContextPrefix = row.ai_context_summary ? `[当時のAI文脈: ${row.ai_context_summary}] ` : '';
+          const aiContextPrefix = row.ai_context_summary ? `[当時のAI文ベース: ${row.ai_context_summary}] ` : '';
           coreLogs.add(`[関連トピック: ${row.normalized_phrase}] ${aiContextPrefix}${role}の発言: "${row.message_text}"`);
         });
       }
