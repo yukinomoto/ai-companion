@@ -90,6 +90,7 @@ export const chatService = {
       let webContext = null;
       let memoriesData: any[] = [];
       let recentMessagesData: any[] = [];
+      let lastAiText: string | undefined = undefined; // ★今回の対話の直前のAI発言を保持する変数
 
       // 1. 検索意図判定とTavily検索 (Groq)
       if (apiConfig.getGroqApiKey()) {
@@ -162,6 +163,12 @@ export const chatService = {
           .limit(HISTORY_LIMIT);
 
         if (!historyError && recentMessages && recentMessages.length > 0) {
+          // ★ [繋ぎ込みポイント] 直近の会話履歴から最新のAI発言（sender === 'ai'）をスキャンして抽出
+          const lastAiMessage = recentMessages.find(m => m.sender === 'ai');
+          if (lastAiMessage) {
+            lastAiText = lastAiMessage.text; // ユーザーが喋る直前のAIのコンテキストを確保
+          }
+
           recentMessagesData = recentMessages.reverse().map(m => ({
             role: m.sender === 'user' ? 'ユーザー' : 'AI',
             content: m.text
@@ -171,46 +178,18 @@ export const chatService = {
         console.error('履歴取得エラー:', e);
       }
 
+      // 3. 過去のコア証拠（長期記憶）の取得
       try {
-<<<<<<< HEAD
+        // 💡 衝突解消：古いベクトル検索・ノードマッチングを完全に撤去し、新しい代表証拠検索に一本化
         memoriesData = await memoryService.retrieveRelevantEvidence(userText);
-=======
-        if (apiConfig.getGeminiApiKey()) {
-          const userVector = await apiWrapper.execute('GEMINI', false, async () => {
-            const ai = new GoogleGenAI({ apiKey: apiConfig.getGeminiApiKey() });
-            const embedResponse = await ai.models.embedContent({
-              model: 'gemini-embedding-2',
-              contents: userText,
-              config: { outputDimensionality: 768 }
-            });
-            return embedResponse.embeddings?.[0]?.values;
-          });
-
-          if (userVector) {
-            const { data: memories, error } = await supabase.rpc('match_user_nodes', {
-              query_embedding: userVector,
-              match_threshold: MATCH_THRESHOLD,
-              match_count: MATCH_COUNT
-            });
-
-            // 💡 記憶の引き出し結果をログに記録
-            logEvent('memory_retrieved', {
-              payload: {
-                hit_count: memories ? memories.length : 0,
-                retrieved_items: memories ? memories.map((m: any) => ({
-                  topic: m.topic_name,
-                  category: m.category,
-                  score: m.strength_score
-                })) : []
-              }
-            });
-
-            if (!error && memories && memories.length > 0) {
-              memoriesData = memories.map((m: any) => `・${m.topic_name} (${m.category}): ${m.summary}`);
-            }
+        
+        // 💡 記憶の引き出し結果をログに記録
+        logEvent('memory_retrieved', {
+          payload: {
+            hit_count: memoriesData.length,
+            retrieved_items: memoriesData
           }
-        }
->>>>>>> fea81a206f244ad13a454d17f452e357e03e782e
+        });
       } catch (e) {
         console.error('記憶の取得エラー:', e);
       }
@@ -308,9 +287,9 @@ export const chatService = {
         session_id: sessionId 
       });
 
-      // 💡 新しい記憶抽出処理を呼び出す（ユーザーの発言IDを渡す）
+      // 💡 新しい記憶抽出処理を呼び出す（ユーザーの発言IDに加えて、直前のAI発言コンテキスト lastAiText を引き渡す）
       if (userMsgData?.id) {
-        memoryService.processConversation(userMsgData.id, userText).catch(console.error);
+        memoryService.processConversation(userMsgData.id, userText, lastAiText).catch(console.error);
       }
 
       return { aiText, altText };
