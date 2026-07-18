@@ -7,8 +7,6 @@ import { apiConfig, API_MODELS } from '../config/apiConfig';
 import { apiWrapper } from '../utils/apiWrapper';
 import { useLoggerStore } from '../store/useLoggerStore'; // 💡 ログストアをインポート
 
-const MATCH_THRESHOLD = 0.3;
-const MATCH_COUNT = 5;
 const HISTORY_LIMIT = 6;
 
 export interface MultimodalAttachment {
@@ -163,7 +161,7 @@ export const chatService = {
           .limit(HISTORY_LIMIT);
 
         if (!historyError && recentMessages && recentMessages.length > 0) {
-          // ★ [繋ぎ込みポイント] 直近の会話履歴から最新のAI発言（sender === 'ai'）をスキャンして抽出
+          // ★ 直近の会話履歴から最新のAI発言（sender === 'ai'）をスキャンして抽出
           const lastAiMessage = recentMessages.find(m => m.sender === 'ai');
           if (lastAiMessage) {
             lastAiText = lastAiMessage.text; // ユーザーが喋る直前のAIのコンテキストを確保
@@ -180,7 +178,7 @@ export const chatService = {
 
       // 3. 過去のコア証拠（長期記憶）の取得
       try {
-        // 💡 衝突解消：古いベクトル検索・ノードマッチングを完全に撤去し、新しい代表証拠検索に一本化
+        // 新しい代表証拠検索に一本化
         memoriesData = await memoryService.retrieveRelevantEvidence(userText);
         
         // 💡 記憶の引き出し結果をログに記録
