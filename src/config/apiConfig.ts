@@ -9,10 +9,10 @@ export const API_MODELS = {
     MULTIMODAL: 'gemini-3.5-flash',
   },
   GROQ: {
-    // 💡 404を回避し、JSON構造化の打率が最も高い確定プロダクションモデルへ変更
-    L2_EXTRACTOR: 'llama-3.3-70b-versatile',
+    // 💡 404を解決するため、元々定義されていた確実な動作モデルへ完全復旧
+    L2_EXTRACTOR: 'llama-3.1-8b-instant',
     STT_WHISPER: 'whisper-large-v3',
-    TEXT_FIXER: 'llama-3.3-70b-versatile',
+    TEXT_FIXER: 'llama-3.1-8b-instant',
   },
   GOOGLE_TTS: {
     VOICE_NAME: 'ja-JP-Neural2-B',
