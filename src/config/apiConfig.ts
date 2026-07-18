@@ -9,12 +9,20 @@ export const API_MODELS = {
     MULTIMODAL: 'gemini-3.5-flash',
   },
   GROQ: {
-    L2_EXTRACTOR: 'llama-3.1-8b-instant',
+    // 💡 終息した旧Llama 3.1から、2026年最新のLlama 4世代の軽量高速モデルへ全面移行
+    L2_EXTRACTOR: 'llama-4-8b-instant',
     STT_WHISPER: 'whisper-large-v3',
-    TEXT_FIXER: 'llama-3.1-8b-instant',
+    TEXT_FIXER: 'llama-4-8b-instant',
   },
   GOOGLE_TTS: {
     VOICE_NAME: 'ja-JP-Neural2-B',
+  }
+};
+
+// 💡 モデルの挙動を制御するパラメータ群を一元集約
+export const MODEL_PARAMS = {
+  GEMINI: {
+    THINKING_BUDGET_HIGH: 32768, // 思考レベルHigh（最大値）
   }
 };
 
@@ -34,7 +42,7 @@ const API_KEYS = {
     PRIMARY: import.meta.env.VITE_TAVILY_API_KEY || '',
     SECONDARY: import.meta.env.VITE_TAVILY_API_KEY_SECONDARY || '',
   },
-  GOOGLE_TTS: import.meta.env.VITE_GOOGLE_CLOUD_API_KEY || '', // バックアップ不要のため単一化
+  GOOGLE_TTS: import.meta.env.VITE_GOOGLE_CLOUD_API_KEY || '',
 };
 
 // ==========================================
@@ -47,19 +55,12 @@ const depletionFlags = {
 };
 
 export const apiConfig = {
-  // 通常チャット用（枯渇時にセカンダリへ自動切り替え）
   getGeminiApiKey: (): string => depletionFlags.GEMINI ? API_KEYS.GEMINI.SECONDARY : API_KEYS.GEMINI.PRIMARY,
-  
-  // マルチモーダル専用（常にセカンダリのみを使用）
   getGeminiMultimodalKey: (): string => API_KEYS.GEMINI.SECONDARY,
-  
   getGroqApiKey: (): string => depletionFlags.GROQ ? API_KEYS.GROQ.SECONDARY : API_KEYS.GROQ.PRIMARY,
   getTavilyApiKey: (): string => depletionFlags.TAVILY ? API_KEYS.TAVILY.SECONDARY : API_KEYS.TAVILY.PRIMARY,
   getGoogleTtsApiKey: (): string => API_KEYS.GOOGLE_TTS,
 
-  /**
-   * エラー検知時にバックアップ系統へ切り替える
-   */
   markAsDepleted: (service: 'GEMINI' | 'GROQ' | 'TAVILY') => {
     if (!depletionFlags[service]) {
       depletionFlags[service] = true;

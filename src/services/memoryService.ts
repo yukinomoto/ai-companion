@@ -2,19 +2,19 @@
 import { supabase } from '../lib/supabase';
 import { GoogleGenAI, Type, type Schema } from '@google/genai';
 import { textNormalizer } from '../utils/textNormalizer';
-
-const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
-const ai = new GoogleGenAI({ apiKey: geminiApiKey || '' });
+import { apiConfig, API_MODELS, MODEL_PARAMS } from '../config/apiConfig'; // 💡 MODEL_PARAMS もインポート
 
 export const memoryService = {
   /**
    * ユーザーの発話からフレーズを抽出し、DBの生ログ(chat_messages)とリンクさせる
-   * @param aiContextSummary 对話当時のAI側の発言・文脈の要約（オプション）
+   * @param aiContextSummary 対話当時のAI側の発言・文脈の要約（オプション）
    */
   processConversation: async (chatMessageId: string, userMessage: string, aiContextSummary?: string) => {
-    if (!geminiApiKey) return;
+    const apiKey = apiConfig.getGeminiApiKey();
+    if (!apiKey) return;
 
     try {
+      const ai = new GoogleGenAI({ apiKey });
       const prompt = `以下のユーザーの発話から、記憶のインデックスとなる「重要な名詞」「固有名詞」「トピック」を抽出してください。\n\n発話: "${userMessage}"`;
 
       const responseSchema: Schema = {
@@ -26,12 +26,13 @@ export const memoryService = {
       };
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash', 
+        model: API_MODELS.GEMINI.PRIMARY,
         contents: prompt,
         config: {
           responseMimeType: 'application/json',
           responseSchema: responseSchema,
-          thinkingConfig: { thinkingBudget: 1024 }
+          // 💡 一元管理ファイルから定数を安全に取得
+          thinkingConfig: { thinkingBudget: MODEL_PARAMS.GEMINI.THINKING_BUDGET_HIGH }
         }
       });
 
@@ -56,7 +57,6 @@ export const memoryService = {
           continue;
         }
 
-        // 中間テーブルに ai_context_summary カラムも含めて upsert
         const { error: linkError } = await supabase
           .from('chat_message_phrase_links')
           .upsert({
@@ -73,7 +73,6 @@ export const memoryService = {
 
         console.log(`🔗 記憶リンク作成: [${rawPhrase}] -> MsgID: ${chatMessageId}`);
         
-        // 最新のコンテキストを踏まえてコアログを再選定
         await memoryService.reevaluateCoreLogs(phraseId, normalized);
       }
     } catch (error) {
@@ -85,8 +84,10 @@ export const memoryService = {
    * 特定のフレーズに紐づく生ログ群を見直し、300文字の仮要約から逆算して代表証拠（is_core）を選定し直す
    */
   reevaluateCoreLogs: async (phraseId: string, phraseName: string) => {
+    const apiKey = apiConfig.getGeminiApiKey();
+    if (!apiKey) return;
+
     try {
-      // ai_context_summary も一緒にセレクトする
       const { data: links, error: fetchError } = await supabase
         .from('chat_message_phrase_links')
         .select(`
@@ -110,7 +111,6 @@ export const memoryService = {
         };
       });
 
-      // 2ステップ＋クッション（Keep）を明記した新プロンプト
       const prompt = `あなたは記憶の監査モジュールです。
 トピック「${phraseName}」に関する、時系列の【生ログ＋当時のAI文脈】を読み込み、以下の2つのステップを厳格に実行してください。
 
@@ -124,13 +124,13 @@ export const memoryService = {
    この生ログが消えたら、ステップ1の300文字の要約が成立しなくなる、または事実に反することになる「絶対的な代表証拠」。
 2. "Keep"（クッション・保留）:
    ステップ1の300文字の要約には直接現れていないが、「過去の重要な前提事実」や「まだ否定されていないユーザーの価値観」であり、念のため記憶に残しておくべきログ。
-3. "Drop"（除外）:
+3. "Drop" \
+_（除外）:
    今回の要約とは無関係な古い誤解、挨拶、相槌、または完全に内容が陳腐化したログ。
 
 【対象ログ群】
 ${JSON.stringify(logListForLLM, null, 2)}`;
 
-      // JSON Mode 用の構造化スキーマの定義
       const responseSchema: Schema = {
         type: Type.OBJECT,
         properties: {
@@ -158,20 +158,21 @@ ${JSON.stringify(logListForLLM, null, 2)}`;
         required: ["summary", "evaluations"]
       };
 
+      const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: API_MODELS.GEMINI.PRIMARY,
         contents: prompt,
         config: {
           responseMimeType: 'application/json',
           responseSchema: responseSchema,
-          thinkingConfig: { thinkingBudget: 1024 }
+          // 💡 一元管理ファイルから定数を安全に取得
+          thinkingConfig: { thinkingBudget: MODEL_PARAMS.GEMINI.THINKING_BUDGET_HIGH }
         }
       });
 
       const result = JSON.parse(response.text || '{"summary":"","evaluations":[]}');
       const evaluations = result.evaluations || [];
 
-      // 評価結果をクイックに参照するためのMapを作成
       const evalMap = new Map<string, 'Core' | 'Keep' | 'Drop'>();
       evaluations.forEach((e: any) => {
         evalMap.set(String(e.id), e.rating);
@@ -179,7 +180,6 @@ ${JSON.stringify(logListForLLM, null, 2)}`;
 
       let coreCount = 0;
 
-      // 各リンクのフラグ更新（クッションロジックの適用）
       for (const link of links) {
         const rating = evalMap.get(String(link.chat_message_id));
         let nextIsCore = false;
@@ -187,16 +187,13 @@ ${JSON.stringify(logListForLLM, null, 2)}`;
         if (rating === 'Core') {
           nextIsCore = true;
         } else if (rating === 'Keep') {
-          // 【クッション】前回コアだったものだけ1ターン延命して維持
           nextIsCore = link.is_core; 
         } else {
-          // Drop、あるいは判定漏れは自動デトックス（false）
           nextIsCore = false;
         }
 
         if (nextIsCore) coreCount++;
 
-        // 状態に変化があった場合のみDBを更新
         if (link.is_core !== nextIsCore) {
           await supabase
             .from('chat_message_phrase_links')
@@ -216,9 +213,11 @@ ${JSON.stringify(logListForLLM, null, 2)}`;
    * ユーザーの入力から関連するコア証拠（代表ログ）を検索・取得する
    */
   retrieveRelevantEvidence: async (userMessage: string): Promise<string[]> => {
-    if (!geminiApiKey) return [];
+    const apiKey = apiConfig.getGeminiApiKey();
+    if (!apiKey) return [];
 
     try {
+      const ai = new GoogleGenAI({ apiKey });
       const prompt = `以下のユーザーの発話から、過去の記憶を検索するための「検索キーワード（名詞、固有名詞、トピック）」を最大3つ抽出してください。\n\n発話: "${userMessage}"`;
 
       const responseSchema: Schema = {
@@ -228,7 +227,7 @@ ${JSON.stringify(logListForLLM, null, 2)}`;
       };
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: API_MODELS.GEMINI.PRIMARY,
         contents: prompt,
         config: {
           responseMimeType: 'application/json',
@@ -246,7 +245,6 @@ ${JSON.stringify(logListForLLM, null, 2)}`;
         const normalized = textNormalizer.normalizePhrase(keyword);
         if (!normalized) continue;
 
-        // 💡 カラム名を実際のスキーマ（normalized_phrase）に修正
         const { data: phraseData } = await supabase
           .from('phrases')
           .select('id, normalized_phrase')
@@ -255,7 +253,6 @@ ${JSON.stringify(logListForLLM, null, 2)}`;
 
         if (!phraseData) continue;
 
-        // 検索時、中間テーブルの ai_context_summary も合わせて取得するように強化
         const { data: links } = await supabase
           .from('chat_message_phrase_links')
           .select(`
@@ -272,7 +269,7 @@ ${JSON.stringify(logListForLLM, null, 2)}`;
             if (msg) {
               const role = msg.sender === 'user' ? 'ユーザー' : 'AI';
               const aiContextPrefix = link.ai_context_summary ? `[当時のAI文脈: ${link.ai_context_summary}] ` : '';
-              coreLogs.add(`[関連トピック: ${phraseData.normalized_phrase}] ${aiContextPrefix}${role}の発言: "${msg.text}"`); // 💡 ここも normalized_phrase に修正
+              coreLogs.add(`[関連トピック: ${phraseData.normalized_phrase}] ${aiContextPrefix}${role}の発言: "${msg.text}"`);
             }
           });
         }
