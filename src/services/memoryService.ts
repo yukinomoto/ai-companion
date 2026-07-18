@@ -246,10 +246,11 @@ ${JSON.stringify(logListForLLM, null, 2)}`;
         const normalized = textNormalizer.normalizePhrase(keyword);
         if (!normalized) continue;
 
+        // 💡 カラム名を実際のスキーマ（normalized_phrase）に修正
         const { data: phraseData } = await supabase
           .from('phrases')
-          .select('id, normalized_text')
-          .eq('normalized_text', normalized)
+          .select('id, normalized_phrase')
+          .eq('normalized_phrase', normalized)
           .maybeSingle();
 
         if (!phraseData) continue;
@@ -270,9 +271,8 @@ ${JSON.stringify(logListForLLM, null, 2)}`;
             const msg: any = Array.isArray(link.chat_messages) ? link.chat_messages[0] : link.chat_messages;
             if (msg) {
               const role = msg.sender === 'user' ? 'ユーザー' : 'AI';
-              // 当時のAI文脈の要約があれば、それも証拠の文脈プレフィックスとして結合する
               const aiContextPrefix = link.ai_context_summary ? `[当時のAI文脈: ${link.ai_context_summary}] ` : '';
-              coreLogs.add(`[関連トピック: ${phraseData.normalized_text}] ${aiContextPrefix}${role}の発言: "${msg.text}"`);
+              coreLogs.add(`[関連トピック: ${phraseData.normalized_phrase}] ${aiContextPrefix}${role}の発言: "${msg.text}"`); // 💡 ここも normalized_phrase に修正
             }
           });
         }
