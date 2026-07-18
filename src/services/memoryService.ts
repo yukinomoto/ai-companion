@@ -206,33 +206,27 @@ export const memoryService = {
         const normalized = textNormalizer.normalizePhrase(keyword);
         if (!normalized) continue;
 
-        // 💡 改善: phrases単体の直接SELECTを廃止し、リレーション結合(!inner)で直接コア証拠ごと引き出す
-        // これにより、phrasesテーブル単体への直接アクセスに対するRLSの制約をスマートにバイパスします
-        const { data: links, error: fetchError } = await supabase
-          .from('chat_message_phrase_links')
-          .select(`
-            ai_context_summary,
-            chat_messages ( text, sender ),
-            phrases!inner ( normalized_phrase )
-          `)
-          .eq('phrases.normalized_phrase', normalized)
-          .eq('is_core', true)
-          .limit(5);
+        // 💡 改善: クライアント側でのテーブル直接結合を廃止し、セキュリティ定義関数(RPC)へ完全移行
+        const { data: rpcRows, error: rpcError } = await supabase.rpc('retrieve_core_evidence', {
+          p_normalized: normalized
+        });
 
-        if (fetchError || !links || links.length === 0) {
-          console.log(`🔎 [記憶検索スタック] コア証拠ヒットなし (またはRLS制限): [${normalized}]`);
+        if (rpcError) {
+          console.error(`❌ [記憶検索スタック] RPCエラー発生 [${normalized}]:`, rpcError.message);
           continue;
         }
 
-        console.log(`🔎 [記憶検索スタック] 記憶が正常にヒットしました! : [${normalized}] (取得数: ${links.length}件)`);
+        if (!rpcRows || rpcRows.length === 0) {
+          console.log(`🔎 [記憶検索スタック] コア証拠ヒットなし: [${normalized}]`);
+          continue;
+        }
 
-        links.forEach(link => {
-          const msg: any = Array.isArray(link.chat_messages) ? link.chat_messages[0] : link.chat_messages;
-          if (msg) {
-            const role = msg.sender === 'user' ? 'ユーザー' : 'AI';
-            const aiContextPrefix = link.ai_context_summary ? `[当時のAI文脈: ${link.ai_context_summary}] ` : '';
-            coreLogs.add(`[関連トピック: ${normalized}] ${aiContextPrefix}${role}の発言: "${msg.text}"`);
-          }
+        console.log(`🎯 [記憶検索スタック] 記憶のバイパス取得に成功! : [${normalized}] (取得数: ${rpcRows.length}件)`);
+
+        rpcRows.forEach((row: any) => {
+          const role = row.message_sender === 'user' ? 'ユーザー' : 'AI';
+          const aiContextPrefix = row.ai_context_summary ? `[当時のAI文脈: ${row.ai_context_summary}] ` : '';
+          coreLogs.add(`[関連トピック: ${row.normalized_phrase}] ${aiContextPrefix}${role}の発言: "${row.message_text}"`);
         });
       }
 
