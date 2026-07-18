@@ -1,11 +1,11 @@
 // src/services/chatService.ts
 import { supabase } from '../lib/supabase';
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
-import { memoryService } from './memoryService'; // 💡 新しい memoryService に変更
+import { memoryService } from './memoryService'; 
 import { SYSTEM_PROMPTS } from '../prompts';
-import { apiConfig, API_MODELS } from '../config/apiConfig';
+import { apiConfig, API_MODELS, MODEL_CONFIGS } from '../config/apiConfig'; // 💡 MODEL_CONFIGS を追加インポート
 import { apiWrapper } from '../utils/apiWrapper';
-import { useLoggerStore } from '../store/useLoggerStore'; // 💡 ログストアをインポート
+import { useLoggerStore } from '../store/useLoggerStore'; 
 
 const HISTORY_LIMIT = 6;
 
@@ -64,7 +64,6 @@ const uploadAttachmentToStorage = async (attachment: MultimodalAttachment, sessi
 
 export const chatService = {
   sendMessage: async (userText: string, sessionId: string, attachment?: MultimodalAttachment): Promise<ChatResponse> => {
-    // 💡 ログ関数の取得
     const logEvent = useLoggerStore.getState().logEvent;
 
     try {
@@ -77,7 +76,6 @@ export const chatService = {
         messagePrefix = isImage ? '[画像を送信しました] ' : '[ファイルを送信しました] ';
       }
 
-      // 💡 修正: ユーザーメッセージを保存し、その id (UUID) を取得する
       const { data: userMsgData } = await supabase.from('chat_messages').insert({ 
         sender: 'user', 
         text: attachment ? `${messagePrefix}${userText}` : userText, 
@@ -88,7 +86,7 @@ export const chatService = {
       let webContext = null;
       let memoriesData: any[] = [];
       let recentMessagesData: any[] = [];
-      let lastAiText: string | undefined = undefined; // ★今回の対話の直前のAI発言を保持する変数
+      let lastAiText: string | undefined = undefined; 
 
       // 1. 検索意図判定とTavily検索 (Groq)
       if (apiConfig.getGroqApiKey()) {
@@ -117,7 +115,6 @@ export const chatService = {
             return JSON.parse(groqData.choices[0].message.content);
           });
 
-          // 💡 意図判定の結果をログに記録
           if (intent) {
             logEvent('intent_parsed', {
               payload: {
@@ -161,10 +158,9 @@ export const chatService = {
           .limit(HISTORY_LIMIT);
 
         if (!historyError && recentMessages && recentMessages.length > 0) {
-          // ★ 直近の会話履歴から最新のAI発言（sender === 'ai'）をスキャンして抽出
           const lastAiMessage = recentMessages.find(m => m.sender === 'ai');
           if (lastAiMessage) {
-            lastAiText = lastAiMessage.text; // ユーザーが喋る直前のAIのコンテキストを確保
+            lastAiText = lastAiMessage.text; 
           }
 
           recentMessagesData = recentMessages.reverse().map(m => ({
@@ -178,10 +174,7 @@ export const chatService = {
 
       // 3. 過去のコア証拠（長期記憶）の取得
       try {
-        // 新しい代表証拠検索に一本化
         memoriesData = await memoryService.retrieveRelevantEvidence(userText);
-        
-        // 💡 記憶の引き出し結果をログに記録
         logEvent('memory_retrieved', {
           payload: {
             hit_count: memoriesData.length,
@@ -232,6 +225,7 @@ export const chatService = {
           model: modelName,
           contents: contentsParts,
           config: {
+            ...MODEL_CONFIGS.GEMINI.DEFAULT_HIGH_THINKING, // 💡 設定ファイルからThinking High(32768)を一元注入
             systemInstruction: systemInstructionText,
             safetySettings: [
               { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
@@ -258,6 +252,7 @@ export const chatService = {
             model: API_MODELS.GEMINI.PRIMARY, 
             contents: [{ text: bPayload }],
             config: {
+              ...MODEL_CONFIGS.GEMINI.DEFAULT_HIGH_THINKING, // 💡 役割Bの思考設定も100%一元管理のHighで統一
               systemInstruction: SYSTEM_PROMPTS.EXPAND_MODE,
               temperature: 0.7, 
               safetySettings: [
@@ -278,14 +273,12 @@ export const chatService = {
       // 6. データベース保存と裏方タスクの実行
       const combinedTextToSave = altText ? `${aiText}\n\n${altText}` : aiText;
 
-      // AIの発言は履歴として保存するだけ
       await supabase.from('chat_messages').insert({ 
         sender: 'ai', 
         text: combinedTextToSave, 
         session_id: sessionId 
       });
 
-      // 💡 新しい記憶抽出処理を呼び出す（ユーザーの発言IDに加えて、直前のAI発言コンテキスト lastAiText を引き渡す）
       if (userMsgData?.id) {
         memoryService.processConversation(userMsgData.id, userText, lastAiText).catch(console.error);
       }

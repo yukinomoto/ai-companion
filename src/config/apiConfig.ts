@@ -9,7 +9,6 @@ export const API_MODELS = {
     MULTIMODAL: 'gemini-3.5-flash',
   },
   GROQ: {
-    // 💡 終息した旧Llama 3.1から、2026年最新のLlama 4世代の軽量高速モデルへ全面移行
     L2_EXTRACTOR: 'llama-4-8b-instant',
     STT_WHISPER: 'whisper-large-v3',
     TEXT_FIXER: 'llama-4-8b-instant',
@@ -19,10 +18,15 @@ export const API_MODELS = {
   }
 };
 
-// 💡 モデルの挙動を制御するパラメータ群を一元集約
-export const MODEL_PARAMS = {
+// 💡 【完全集約】APIに渡す挙動設定オブジェクトそのものを一元管理
+// 全てのGemini呼び出しでThinking levelをHigh(32768)にする共通設定
+export const MODEL_CONFIGS = {
   GEMINI: {
-    THINKING_BUDGET_HIGH: 32768, // 思考レベルHigh（最大値）
+    DEFAULT_HIGH_THINKING: {
+      thinkingConfig: {
+        thinkingBudget: 32768
+      }
+    }
   }
 };
 
